@@ -8,4 +8,5 @@
 - [x] Task 4 — Game 엔진 + 키보드 모드
 - [x] Task 5 — PoseTracker + 디버그 패널
 - [x] Task 6 — 화면 전환 + 점수 연동
-- [ ] 실측 튜닝 — 임계값을 몸으로 조정하고 context-notes.md에 확정값 기록
+- [x] 실측 튜닝 — 임계값을 몸으로 조정하고 context-notes.md에 확정값 기록
+      (점프를 머리 기준으로 옮기고 peak-hold 로 봉우리 0.19 를 실측, 임계 0.15 확정)
