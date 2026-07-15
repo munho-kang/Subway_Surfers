@@ -169,7 +169,9 @@ python_files = test_*.py
 - [ ] **Step 3: 테스트를 돌려 실패를 확인한다**
 
 Run: `.venv/bin/pytest -q`
-Expected: FAIL — `ModuleNotFoundError: No module named 'config'`
+Expected: FAIL — `ImportError: No module named 'config'`에 이어
+`pytest-django could not find a Django project`. pytest-django 가 자체 래퍼에서
+`ImportError`로 바꿔 던지므로 `ModuleNotFoundError`가 아니다.
 
 - [ ] **Step 4: 스캐폴드를 작성한다**
 

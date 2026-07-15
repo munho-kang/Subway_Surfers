@@ -7,7 +7,7 @@
 - 랜드마크 `visibility`는 채워진다. 설계 문서가 남긴 미확인 사항은 해소됐고 대체 수단은
   필요 없다. 값이 안 온다는 보고는 2023년 이슈이며 PR #5142로 2024-03에 수정됐다.
   실측 범위 0.941~0.99999. `presence`는 JS API에 없다.
-- `detectForVideo`는 타임스탐프가 필수이고 동기로 반환한다. 문서 예제가 틀렸다.
+- `detectForVideo`는 타임스탬프가 필수이고 동기로 반환한다. 문서 예제가 틀렸다.
 - Python 3.14.4에서 Django 6.0.7 + gspread 6.2.1이 동작한다.
 - `DATABASES = {}`로 DB 없이 부팅된다.
 - pytest-django는 `pytest.ini`에 `pythonpath = .`이 없으면 설정 모듈을 못 찾는다.
