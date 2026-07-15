@@ -35,8 +35,6 @@
     #debug label { display: block; margin-top: 8px; }
     #debug input[type=range] { width: 100%; }
     #debug .row { display: flex; justify-content: space-between; }
-    #debug .bad { color: #ff6b6b; }
-    #debug .good { color: #7ef6a0; }
     #banner {
       position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
       padding: 10px 18px; border-radius: 999px; background: rgba(229,83,61,0.92);
@@ -114,11 +112,14 @@
       EYE_L: 2, EYE_R: 5,
       SHO_L: 11, SHO_R: 12,
       HIP_L: 23, HIP_R: 24,
-      ANK_L: 27, ANK_R: 28,
     };
 
     const DEFAULT_CFG = {
-      jumpThreshold: 0.1,     // 몸통 길이 대비. 실측 점프 봉우리 0.13 의 약 77%
+      // 몸통 길이 대비. 잠정값이고 아직 미검증이다 — 실측으로 확정해야 한다.
+      // 머리는 몸이 뜬 만큼만 올라가고 발목은 거기에 무릎 접은 양이 더해지므로
+      // 항상 머리 상승량 ≤ 발목 상승량 이다. 발목 실측 봉우리가 0.13 이었으니
+      // 머리 봉우리는 그 이하다. 디버그 패널의 봉우리를 읽어 그 값의 75~80% 로 잡는다
+      jumpThreshold: 0.08,
       slideThreshold: 0.5,    // 몸통 길이 대비. 이만큼 숙이면 슬라이드가 걸린다
       // 슬라이드를 푸는 문턱. 거는 문턱보다 낮게 둬 경계에서 떠는 것을 막는다.
       // 이 히스테리시스가 없으면 문턱 근처에서 한 프레임 떨어질 때 마침 가로보가
@@ -128,7 +129,6 @@
       laneAlpha: 0.3,         // 레인 x EMA
       animMs: 600,            // Game의 JUMP_MS와 값을 맞춰야 한다 (아래 "── Game" 섹션)
       refractoryMs: 300,
-      visibilityMin: 0.5,
       laneOutLeft: 0.30,      // 가운데 → 왼쪽
       laneOutRight: 0.70,     // 가운데 → 오른쪽
       laneInLeft: 0.36,       // 왼쪽 → 가운데
@@ -148,14 +148,13 @@
       const shoulder = midpoint(lm[LM.SHO_L], lm[LM.SHO_R]);
       const hip = midpoint(lm[LM.HIP_L], lm[LM.HIP_R]);
       const eye = midpoint(lm[LM.EYE_L], lm[LM.EYE_R]);
-      const ankle = midpoint(lm[LM.ANK_L], lm[LM.ANK_R]);
       const torsoLen = Math.abs(shoulder.y - hip.y);
-      return { shoulder, hip, eye, ankle, torsoLen };
+      return { shoulder, hip, eye, torsoLen };
     }
     // ── InputMapper — 랜드마크를 조작 신호로 바꾼다. 카메라도 게임도 모른다
     function createInputMapper(overrides = {}) {
       const cfg = { ...DEFAULT_CFG, ...overrides };
-      let baseline = null;          // { ankleY, eyeY }
+      let baseline = null;          // { eyeY }
       let calibSamples = [];
       let smoothedLaneX = null;
       let lane = 1;
@@ -163,20 +162,19 @@
       let jumpWasOver = false;
       let sliding = false;          // 엣지가 아니라 유지되는 자세다
       let lastSignal = { lane: 1, jump: false, slide: false, warning: null };
-      let debug = { jumpAmount: 0, slideAmount: 0, laneX: 0.5, ankleVisibility: 1 };
+      let debug = { headRise: 0, laneX: 0.5 };
 
       function addCalibrationSample(lm) {
         if (!lm) return;
         const m = poseMetrics(lm);
         if (m.torsoLen < 1e-6) return;
-        calibSamples.push({ ankleY: m.ankle.y, eyeY: m.eye.y });
+        calibSamples.push({ eyeY: m.eye.y });
       }
 
       function commitCalibration() {
         if (calibSamples.length === 0) return false;
         const n = calibSamples.length;
         baseline = {
-          ankleY: calibSamples.reduce((s, c) => s + c.ankleY, 0) / n,
           eyeY: calibSamples.reduce((s, c) => s + c.eyeY, 0) / n,
         };
         calibSamples = [];
@@ -213,26 +211,25 @@
         }
 
         // 몸통 길이로 나눠 거리 변화에 무관하게 만든다.
-        // 발목 y 에는 EMA 를 걸지 않는다. 빠뜨린 게 아니라 의도적이다 —
+        // 눈 y 에는 EMA 를 걸지 않는다. 빠뜨린 게 아니라 의도적이다 —
         // 점프는 짧고 빠른 순간 신호라 스무딩하면 봉우리가 뭉개져 감지 자체가 안 된다
-        const jumpAmount = (baseline.ankleY - m.ankle.y) / m.torsoLen;   // 발목이 뜨면 양수
-        const slideAmount = (m.eye.y - baseline.eyeY) / m.torsoLen;      // 머리가 내려가면 양수
-        const ankleVisibility = m.ankle.visibility;
-        const ankleOk = ankleVisibility >= cfg.visibilityMin;
+        const headRise = (baseline.eyeY - m.eye.y) / m.torsoLen;   // 머리가 뜨면 양수
 
         // 슬라이드는 자세다 — 숙이고 있는 동안 유지되고 몸을 세우면 풀린다.
         // 걸 때는 slideThreshold, 풀 때는 그보다 낮은 문턱을 쓴다
         sliding = sliding
-          ? slideAmount > cfg.slideThreshold * cfg.slideRelease
-          : slideAmount > cfg.slideThreshold;
+          ? headRise < -cfg.slideThreshold * cfg.slideRelease
+          : headRise < -cfg.slideThreshold;
         const slide = sliding;
 
         // 점프는 탄도다 — 뜬 순간이 전부이므로 상승 엣지에서 한 번만 발화하고
-        // 애니메이션+불응기 동안 잠근다. 숙인 채로는 뛸 수 없다
+        // 애니메이션+불응기 동안 잠근다.
+        // 숙인 채로 뛸 수 없다는 것은 따로 막지 않아도 된다. 점프와 슬라이드가
+        // 한 축의 양끝이라 두 조건이 동시에 참일 수가 없다
         const locked = nowMs < lockUntilMs;
-        const jumpOver = ankleOk && jumpAmount > cfg.jumpThreshold;
+        const jumpOver = headRise > cfg.jumpThreshold;
         let jump = false;
-        if (!locked && !sliding && jumpOver && !jumpWasOver) {
+        if (!locked && jumpOver && !jumpWasOver) {
           jump = true;
           lockUntilMs = nowMs + cfg.animMs + cfg.refractoryMs;
         }
@@ -240,11 +237,8 @@
 
         // 기준선 추종 — 판정 중에는 절대 갱신하지 않는다.
         // 이 가드가 없으면 슬라이드 자세가 기준선으로 굳어 슬라이드가 영영 안 먹는다
-        const quiet =
-          Math.abs(jumpAmount) < cfg.jumpThreshold / 2 &&
-          Math.abs(slideAmount) < cfg.slideThreshold / 2;
+        const quiet = Math.abs(headRise) < Math.min(cfg.jumpThreshold, cfg.slideThreshold) / 2;
         if (quiet && !locked && !jump && !slide) {
-          baseline.ankleY += cfg.baselineAlpha * (m.ankle.y - baseline.ankleY);
           baseline.eyeY += cfg.baselineAlpha * (m.eye.y - baseline.eyeY);
         }
 
@@ -252,16 +246,11 @@
         // 판정이 매 프레임의 torsoLen 으로 이뤄지므로 오버레이도 같은 값을 써야
         // 화면의 선과 실제 판정 경계가 어긋나지 않는다
         debug = {
-          jumpAmount, slideAmount, laneX: smoothedLaneX, ankleVisibility,
-          baselineAnkleY: baseline.ankleY, baselineEyeY: baseline.eyeY,
+          headRise, laneX: smoothedLaneX,
+          baselineEyeY: baseline.eyeY,
           torsoLen: m.torsoLen,
         };
-        lastSignal = {
-          lane,
-          jump,
-          slide,
-          warning: ankleOk ? null : '발이 화면에 보이지 않습니다',
-        };
+        lastSignal = { lane, jump, slide, warning: null };
         return lastSignal;
       }
 
@@ -279,11 +268,8 @@
       eyeY = 0.10,
       shoulderY = 0.30,
       hipY = 0.55,
-      ankleY = 0.90,
       visibility = 1.0,
-      ankleVisibility = null,
     } = {}) {
-      const av = ankleVisibility === null ? visibility : ankleVisibility;
       const lm = Array.from({ length: 33 }, () => ({ x: hipX, y: 0.5, z: 0, visibility }));
       lm[LM.EYE_L] = { x: hipX - 0.02, y: eyeY, z: 0, visibility };
       lm[LM.EYE_R] = { x: hipX + 0.02, y: eyeY, z: 0, visibility };
@@ -291,8 +277,6 @@
       lm[LM.SHO_R] = { x: hipX + 0.08, y: shoulderY, z: 0, visibility };
       lm[LM.HIP_L] = { x: hipX - 0.05, y: hipY, z: 0, visibility };
       lm[LM.HIP_R] = { x: hipX + 0.05, y: hipY, z: 0, visibility };
-      lm[LM.ANK_L] = { x: hipX - 0.05, y: ankleY, z: 0, visibility: av };
-      lm[LM.ANK_R] = { x: hipX + 0.05, y: ankleY, z: 0, visibility: av };
       return lm;
     }
 
@@ -334,13 +318,13 @@
       const stand = () => makePose();
 
       check('점프 시퀀스에서 jump가 정확히 1회 발화한다', () => {
-        // 0.90 → 0.83 은 0.07/0.25 = 0.28 몸통. 임계 0.2 를 넘는다
+        // 눈 기준선 0.10, 몸통 0.25. 임계 0.2 → 0.05 위로 뜨면 발화한다
         const m = calibrated();
         const seq = [
           stand(), stand(), stand(),
-          makePose({ ankleY: 0.86 }),   // 0.16 몸통 — 아직 아니다
-          makePose({ ankleY: 0.83 }),   // 0.28 몸통 — 여기서 발화
-          makePose({ ankleY: 0.84 }),   // 0.24 몸통 — 여전히 넘지만 새 엣지가 아니다
+          makePose({ eyeY: 0.06 }),   // 0.16 몸통 — 아직 아니다
+          makePose({ eyeY: 0.03 }),   // 0.28 몸통 — 여기서 발화
+          makePose({ eyeY: 0.04 }),   // 0.24 몸통 — 여전히 넘지만 새 엣지가 아니다
           stand(), stand(), stand(),
         ];
         const r = feed(m, seq);
@@ -401,23 +385,9 @@
           `프레임열 ${showFrames(r.slideAt)} (기대 ${showFrames(want)})`);
       });
 
-      check('숙이고 있는 동안에는 점프가 발화하지 않는다', () => {
-        // 숙인 채로 뛸 수는 없다. 뛰려면 먼저 몸을 세워야 한다
-        const m = calibrated();
-        const r = feed(m, [
-          stand(),
-          makePose({ eyeY: 0.26 }),                  // 슬라이드가 걸린다
-          makePose({ eyeY: 0.26, ankleY: 0.83 }),    // 숙인 채 발목이 떠도 무시된다
-          makePose({ eyeY: 0.26, ankleY: 0.90 }),
-          stand(),                                   // 세웠다
-          makePose({ ankleY: 0.83 }),                // 이제는 뛴다
-        ]);
-        assert(r.jumps === 1, `jump ${r.jumps}회 발화 (기대 1 — 세운 뒤 한 번만)`);
-      });
-
       check('불응기 안의 두 번째 점프는 무시된다', () => {
         const m = calibrated();
-        const pulse = [makePose({ ankleY: 0.83 }), stand()];
+        const pulse = [makePose({ eyeY: 0.03 }), stand()];
         // 약 130ms 안에 두 번. 불응기 900ms 이므로 1회만 나와야 한다
         const r = feed(m, [stand(), ...pulse, ...pulse]);
         assert(r.jumps === 1, `jump ${r.jumps}회 발화 (기대 1)`);
@@ -450,23 +420,11 @@
       check('앞뒤로 움직여 스케일이 변해도 판정이 유지된다', () => {
         // 멀리 선 사람 — 몸통 길이가 절반(0.125)이다. 같은 비율의 점프는 여전히 감지돼야 한다
         const far = (o = {}) =>
-          makePose({ shoulderY: 0.40, hipY: 0.525, ankleY: 0.70, eyeY: 0.35, ...o });
+          makePose({ shoulderY: 0.40, hipY: 0.525, eyeY: 0.35, ...o });
         const m = calibrated(far);
-        // 0.70 → 0.67 은 0.03/0.125 = 0.24 몸통. 가까이 있을 때와 같은 비율이다
-        const r = feed(m, [far(), far({ ankleY: 0.67 }), far()]);
+        // 0.35 → 0.32 는 0.03/0.125 = 0.24 몸통. 가까이 있을 때와 같은 비율이다
+        const r = feed(m, [far(), far({ eyeY: 0.32 }), far()]);
         assert(r.jumps === 1, `먼 거리에서 jump ${r.jumps}회 발화 (기대 1)`);
-      });
-
-      check('발목 visibility가 낮으면 점프가 발화하지 않는다', () => {
-        const m = calibrated();
-        const seq = [
-          stand(),
-          makePose({ ankleY: 0.83, ankleVisibility: 0.2 }),
-          makePose({ ankleY: 0.84, ankleVisibility: 0.2 }),
-          stand(),
-        ];
-        const r = feed(m, seq);
-        assert(r.jumps === 0, `visibility 낮은데 jump가 ${r.jumps}회 발화했다`);
       });
 
       return results;
@@ -814,11 +772,10 @@
     }
     // ── 디버그 패널 — 임계값은 몸으로 해보기 전에는 맞을 수 없다
     const TUNABLES = [
-      { key: 'jumpThreshold', label: '점프 임계', min: 0.05, max: 0.6, step: 0.01 },
+      { key: 'jumpThreshold', label: '점프 임계', min: 0.02, max: 0.6, step: 0.01 },
       { key: 'slideThreshold', label: '슬라이드 임계', min: 0.1, max: 1.0, step: 0.01 },
       { key: 'baselineAlpha', label: '기준선 EMA', min: 0.0, max: 0.2, step: 0.005 },
       { key: 'laneAlpha', label: '레인 EMA', min: 0.05, max: 1.0, step: 0.05 },
-      { key: 'visibilityMin', label: 'visibility 하한', min: 0.0, max: 0.9, step: 0.05 },
     ];
 
     function mountDebugPanel(mapper) {
@@ -826,11 +783,9 @@
       root.classList.remove('hidden');
       root.innerHTML = `
         <h3>디버그 (D 키로 토글)</h3>
-        <div class="row"><span>점프량</span><span id="d-jump">-</span></div>
-        <div class="row"><span>슬라이드량</span><span id="d-slide">-</span></div>
+        <div class="row"><span>머리 높이</span><span id="d-head">-</span></div>
         <div class="row"><span>laneX</span><span id="d-lanex">-</span></div>
         <div class="row"><span>확정 레인</span><span id="d-lane">-</span></div>
-        <div class="row"><span>발목 vis</span><span id="d-vis">-</span></div>
         <div class="row"><span>모드</span><span id="d-mode">-</span></div>
         ${TUNABLES.map((t) => `
           <label>${t.label} <span id="v-${t.key}">${mapper.cfg[t.key]}</span>
@@ -860,13 +815,9 @@
         isVisible: () => !root.classList.contains('hidden'),
         update(debug, lane, mode) {
           if (root.classList.contains('hidden')) return;
-          el('#d-jump').textContent = debug.jumpAmount.toFixed(3);
-          el('#d-slide').textContent = debug.slideAmount.toFixed(3);
+          el('#d-head').textContent = debug.headRise.toFixed(3);
           el('#d-lanex').textContent = debug.laneX.toFixed(3);
           el('#d-lane').textContent = lane;
-          const vis = el('#d-vis');
-          vis.textContent = debug.ankleVisibility.toFixed(2);
-          vis.className = debug.ankleVisibility >= mapper.cfg.visibilityMin ? 'good' : 'bad';
           el('#d-mode').textContent = mode;
         },
       };
@@ -934,8 +885,10 @@
         if (d.torsoLen == null) return;
         ctx.font = '10px ui-monospace, Menlo, monospace';
 
-        // 발목이 이 선 위로 올라가면 점프한다
-        hline(d.baselineAnkleY - cfg.jumpThreshold * d.torsoLen, '#7ef6a0', '점프');
+        // 세 선이 모두 눈 기준선에서 뻗는다. 점프는 위로, 슬라이드는 아래로 —
+        // 판정이 한 축의 양끝이라는 구조가 화면에 그대로 보인다
+        // 머리가 이 선 위로 올라가면 점프한다
+        hline(d.baselineEyeY - cfg.jumpThreshold * d.torsoLen, '#7ef6a0', '점프');
         // 눈이 실선 아래로 내려가면 슬라이드가 걸리고, 점선 위로 올라와야 풀린다.
         // 두 선 사이가 히스테리시스 구간이다 — 여기서는 걸려 있든 풀려 있든 유지된다
         hline(d.baselineEyeY + cfg.slideThreshold * d.torsoLen, '#ffd166', '슬라이드');
