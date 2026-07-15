@@ -1806,8 +1806,8 @@ function boot() {
   const tracker = createPoseTracker();
   const panel = mountDebugPanel(mapper);
 
-  let poseReady = false;   // 세션 동안 카메라 파이프라인이 살아있는지. mode 는 라운드마다 결정된다
   let mode = 'keyboard';   // 이번 라운드의 조작 모드
+  let poseReady = false;   // 세션 동안 카메라 파이프라인이 살아있는지. mode 는 라운드마다 결정된다
   let phase = 'start';
   let countdownEndMs = 0;
   let nickname = '플레이어';
