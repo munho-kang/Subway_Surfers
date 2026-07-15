@@ -161,7 +161,8 @@
       let jumpWasOver = false;
       let sliding = false;          // 엣지가 아니라 유지되는 자세다
       let lastSignal = { lane: 1, jump: false, slide: false, warning: null };
-      let debug = { headRise: 0, laneX: 0.5 };
+      let peakHeadRise = 0;         // 봉우리는 2~3 프레임이라 실시간으로는 못 읽는다. 붙들어서 실측에 쓴다
+      let debug = { headRise: 0, peakHeadRise: 0, laneX: 0.5 };
 
       function addCalibrationSample(lm) {
         if (!lm) return;
@@ -176,6 +177,8 @@
         baseline = {
           eyeY: calibSamples.reduce((s, c) => s + c.eyeY, 0) / n,
         };
+        peakHeadRise = 0;   // 기준선이 바뀌면 이전 봉우리는 의미가 없다
+        debug.peakHeadRise = 0;   // debug 는 update() 가 다시 돌기 전까지 남는 스냅샷이라 직접 갱신한다
         calibSamples = [];
         return true;
       }
@@ -233,6 +236,7 @@
           lockUntilMs = nowMs + cfg.animMs + cfg.refractoryMs;
         }
         jumpWasOver = jumpOver;
+        if (headRise > peakHeadRise) peakHeadRise = headRise;
 
         // 기준선 추종 — 판정 중에는 절대 갱신하지 않는다.
         // 이 가드가 없으면 슬라이드 자세가 기준선으로 굳어 슬라이드가 영영 안 먹는다
@@ -245,7 +249,7 @@
         // 판정이 매 프레임의 torsoLen 으로 이뤄지므로 오버레이도 같은 값을 써야
         // 화면의 선과 실제 판정 경계가 어긋나지 않는다
         debug = {
-          headRise, laneX: smoothedLaneX,
+          headRise, peakHeadRise, laneX: smoothedLaneX,
           baselineEyeY: baseline.eyeY,
           torsoLen: m.torsoLen,
         };
@@ -424,6 +428,25 @@
         // 0.35 → 0.32 는 0.03/0.125 = 0.24 몸통. 가까이 있을 때와 같은 비율이다
         const r = feed(m, [far(), far({ eyeY: 0.32 }), far()]);
         assert(r.jumps === 1, `먼 거리에서 jump ${r.jumps}회 발화 (기대 1)`);
+      });
+
+      check('봉우리는 관측된 최대 상승량을 유지하고 캘리브레이션에서 리셋된다', () => {
+        // 봉우리는 2~3 프레임짜리라 실시간 값으로는 읽을 수 없다. 그래서 붙든다
+        const m = calibrated();
+        feed(m, [stand(), makePose({ eyeY: 0.03 }), stand()]);   // 0.28 몸통
+        const peak = m.getDebug().peakHeadRise;
+        assert(Math.abs(peak - 0.28) < 1e-6, `봉우리 ${peak} (기대 0.28)`);
+
+        // 더 낮은 점프가 뒤따라도 봉우리는 내려가지 않는다
+        feed(m, [makePose({ eyeY: 0.06 }), stand()], 5000);      // 0.16 몸통
+        const held = m.getDebug().peakHeadRise;
+        assert(Math.abs(held - 0.28) < 1e-6, `봉우리가 ${held} 로 내려갔다 (기대 0.28 유지)`);
+
+        // 기준선이 바뀌면 이전 봉우리는 의미가 없다
+        for (let i = 0; i < 30; i++) m.addCalibrationSample(stand());
+        m.commitCalibration();
+        const reset = m.getDebug().peakHeadRise;
+        assert(reset === 0, `캘리브레이션 후 봉우리 ${reset} (기대 0)`);
       });
 
       return results;
@@ -783,6 +806,7 @@
       root.innerHTML = `
         <h3>디버그 (D 키로 토글)</h3>
         <div class="row"><span>머리 높이</span><span id="d-head">-</span></div>
+        <div class="row"><span>점프 봉우리</span><span id="d-peak">-</span></div>
         <div class="row"><span>laneX</span><span id="d-lanex">-</span></div>
         <div class="row"><span>확정 레인</span><span id="d-lane">-</span></div>
         <div class="row"><span>모드</span><span id="d-mode">-</span></div>
@@ -815,6 +839,7 @@
         update(debug, lane, mode) {
           if (root.classList.contains('hidden')) return;
           el('#d-head').textContent = debug.headRise.toFixed(3);
+          el('#d-peak').textContent = debug.peakHeadRise.toFixed(3);
           el('#d-lanex').textContent = debug.laneX.toFixed(3);
           el('#d-lane').textContent = lane;
           el('#d-mode').textContent = mode;
