@@ -1478,10 +1478,20 @@ function createPoseTracker() {
       video: { width: 640, height: 480 },
       audio: false,
     });
-    videoEl.srcObject = stream;
-    await videoEl.play();
-    video = videoEl;
-    landmarker = await loadLandmarker();
+    try {
+      videoEl.srcObject = stream;
+      await videoEl.play();
+      landmarker = await loadLandmarker();
+      video = videoEl;   // 완전히 성공한 뒤에만 붙인다
+    } catch (e) {
+      // MediaPipe 가 죽어도 카메라는 꺼야 한다.
+      // 안 그러면 목적 없이 표시등만 세션 내내 켜져 있다
+      stream.getTracks().forEach((track) => track.stop());
+      videoEl.srcObject = null;
+      video = null;
+      landmarker = null;
+      throw e;
+    }
   }
 
   function read(nowMs) {
