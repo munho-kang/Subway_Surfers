@@ -38,6 +38,34 @@
       padding: 10px 18px; border-radius: 999px; background: rgba(229,83,61,0.92);
       font-size: 14px; font-weight: 600; display: none;
     }
+    .screen {
+      position: absolute; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 18px;
+      background: rgba(11,16,32,0.94); text-align: center; padding: 24px;
+    }
+    .screen h1 { margin: 0; font-size: 34px; letter-spacing: -0.02em; }
+    .screen p { margin: 0; color: rgba(232,236,245,0.7); line-height: 1.7; }
+    #nickname {
+      padding: 12px 16px; width: 260px; font-size: 16px; text-align: center;
+      border-radius: 10px; border: 1px solid rgba(255,255,255,0.2);
+      background: rgba(255,255,255,0.06); color: #e8ecf5;
+    }
+    button {
+      padding: 13px 30px; font-size: 16px; font-weight: 600; cursor: pointer;
+      border-radius: 10px; border: 0; background: #7ef6a0; color: #08121f;
+    }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    #ranking { list-style: none; padding: 0; margin: 0; width: 280px; }
+    #ranking li {
+      display: flex; justify-content: space-between; padding: 7px 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.08); font-size: 14px;
+    }
+    #count { font-size: 120px; font-weight: 700; line-height: 1; }
+    #toast {
+      position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%);
+      padding: 10px 18px; border-radius: 999px; font-size: 14px;
+      background: rgba(255,255,255,0.14); display: none;
+    }
     .hidden { display: none !important; }
   </style>
 </head>
@@ -47,6 +75,30 @@
     <video id="preview" playsinline muted class="hidden"></video>
     <div id="banner"></div>
     <div id="debug" class="hidden"></div>
+
+    <div id="start" class="screen">
+      <h1>포즈 러너</h1>
+      <p>앉아서 닉네임을 넣고 시작을 누르세요.<br />
+         시작하면 5초 안에 1.5~2m 뒤로 물러나 전신이 보이게 서세요.</p>
+      <input id="nickname" maxlength="12" placeholder="닉네임 (최대 12자)" />
+      <button id="start-btn">시작</button>
+      <h3 style="margin:8px 0 0">TOP 10</h3>
+      <ol id="ranking"><li>불러오는 중…</li></ol>
+      <p style="font-size:12px">카메라를 못 쓰면 화살표 키로 조작합니다. D 키로 디버그 패널.</p>
+    </div>
+
+    <div id="countdown" class="screen hidden">
+      <p>뒤로 물러나 가만히 서세요</p>
+      <div id="count">5</div>
+      <p>이 자세를 기준으로 잡습니다</p>
+    </div>
+
+    <div id="gameover" class="screen hidden">
+      <h1 id="final-score">0점</h1>
+      <p id="submit-state">점수를 보내는 중…</p>
+    </div>
+
+    <div id="toast"></div>
   </div>
   <script type="module">
     // ── 상수·랜드마크 인덱스·공용 헬퍼
@@ -727,7 +779,7 @@
         },
       };
     }
-    // ── 화면 전환·API·부트               (Task 6)
+    // ── 화면 전환·API·부트
     const canvas = document.getElementById('canvas');
 
     function resizeCanvas() {
@@ -738,24 +790,84 @@
     window.addEventListener('resize', resizeCanvas);
     resizeCanvas();
 
-    if (new URLSearchParams(location.search).get('test') === '1') {
-      renderSelfTests(runSelfTests());
-    } else {
-      const banner = document.getElementById('banner');
-      const preview = document.getElementById('preview');
+    // ── API — 시트는 부가 기능이다. 실패해도 게임은 계속 간다
+    const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').content;
+    const API_SCORES = '/api/scores/';
+
+    async function fetchTopScores() {
+      const res = await fetch(API_SCORES);
+      if (!res.ok) throw new Error('랭킹 조회 실패');
+      return (await res.json()).scores;
+    }
+
+    async function submitScore(nickname, score) {
+      const res = await fetch(API_SCORES, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
+        body: JSON.stringify({ nickname, score }),
+      });
+      if (!res.ok) throw new Error('점수 전송 실패');
+    }
+
+    function boot() {
+      const el = (id) => document.getElementById(id);
+      const startScreen = el('start');
+      const countdownScreen = el('countdown');
+      const gameoverScreen = el('gameover');
+      const banner = el('banner');
+      const toast = el('toast');
+      const preview = el('preview');
+
       const game = createGame(canvas);
       const keyboard = createKeyboardSource();
       const mapper = createInputMapper();
       const tracker = createPoseTracker();
       const panel = mountDebugPanel(mapper);
+
       let mode = 'keyboard';
+      let phase = 'start';
+      let countdownEndMs = 0;
+      let nickname = '플레이어';
+
+      // show(null) 이면 셋 다 숨는다 — 플레이 중에는 화면 오버레이가 없다
+      const show = (screen) => {
+        for (const s of [startScreen, countdownScreen, gameoverScreen]) {
+          s.classList.toggle('hidden', s !== screen);
+        }
+      };
 
       function showBanner(text) {
         banner.textContent = text ?? '';
         banner.style.display = text ? 'block' : 'none';
       }
 
-      // 카메라나 MediaPipe 가 죽어도 게임은 키보드로 계속 돌아야 한다
+      function showToast(text) {
+        toast.textContent = text;
+        toast.style.display = 'block';
+        setTimeout(() => { toast.style.display = 'none'; }, 3000);
+      }
+
+      async function loadRanking() {
+        const list = el('ranking');
+        try {
+          const scores = await fetchTopScores();
+          list.innerHTML = scores.length
+            ? scores.map((s, i) =>
+                `<li><span>${i + 1}. ${escapeHtml(s.nickname)}</span><span>${s.score}</span></li>`
+              ).join('')
+            : '<li>아직 기록이 없습니다</li>';
+        } catch {
+          list.innerHTML = '<li>불러올 수 없음</li>';
+        }
+      }
+
+      function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+      }
+
+      // 카메라와 MediaPipe 는 시작 화면을 보는 동안 미리 띄운다
       (async () => {
         try {
           await tracker.start(preview);
@@ -763,45 +875,93 @@
           mode = 'pose';
         } catch (e) {
           console.warn('포즈 모드 불가 — 키보드로 진행한다', e);
-          showBanner('카메라를 쓸 수 없습니다. 화살표 키로 조작하세요');
-          setTimeout(() => showBanner(null), 4000);
+          showToast('카메라를 쓸 수 없습니다. 화살표 키로 조작하세요');
         }
       })();
 
-      game.reset(1, performance.now());
-      let calibratedAt = 0;
+      el('start-btn').addEventListener('click', () => {
+        nickname = el('nickname').value.trim().slice(0, 12) || '플레이어';
+        phase = 'countdown';
+        countdownEndMs = performance.now() + 5000;
+        show(countdownScreen);
+      });
 
-      (function loop(nowMs) {
+      el('nickname').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') el('start-btn').click();
+      });
+
+      async function finishGame() {
+        phase = 'gameover';
+        const score = game.getScore();
+        el('final-score').textContent = `${score}점`;
+        el('submit-state').textContent = '점수를 보내는 중…';
+        show(gameoverScreen);
+        try {
+          await submitScore(nickname, score);
+          el('submit-state').textContent = '기록했습니다';
+        } catch {
+          el('submit-state').textContent = '점수를 보내지 못했습니다';
+        }
+        setTimeout(async () => {
+          phase = 'start';
+          keyboard.reset();
+          show(startScreen);
+          await loadRanking();
+        }, 2500);
+      }
+
+      function loop(nowMs) {
         requestAnimationFrame(loop);
+        const landmarks = mode === 'pose' ? tracker.read(nowMs) : null;
+
+        if (phase === 'countdown') {
+          const left = Math.max(0, countdownEndMs - nowMs);
+          el('count').textContent = Math.ceil(left / 1000);
+          if (mode === 'pose' && landmarks) mapper.addCalibrationSample(landmarks);
+          if (left <= 0) {
+            if (mode === 'pose' && !mapper.commitCalibration()) {
+              // 5초 동안 몸을 한 번도 못 찾았다. 포즈 조작이 불가능하다
+              mode = 'keyboard';
+              showToast('몸을 찾지 못했습니다. 화살표 키로 조작하세요');
+            }
+            phase = 'playing';
+            show(null);
+            game.reset(Math.floor(nowMs) % 100000, nowMs);
+          }
+          return;
+        }
+
+        if (phase !== 'playing') return;
 
         let signal;
         if (mode === 'pose') {
-          const lm = tracker.read(nowMs);
-          // 임시 — Task 6 이 5초 카운트다운 캘리브레이션으로 교체한다
-          if (!mapper.isCalibrated()) {
-            if (lm) mapper.addCalibrationSample(lm);
-            if (!calibratedAt) calibratedAt = nowMs + 3000;
-            if (nowMs > calibratedAt) mapper.commitCalibration();
-            showBanner('가만히 서 있으세요 — 캘리브레이션 중');
-            game.render();
-            return;
-          }
-          signal = mapper.update(lm, nowMs);
+          signal = mapper.update(landmarks, nowMs);
           showBanner(signal.warning);
-          panel.update(mapper.getDebug(), signal.lane, 'pose');
         } else {
           signal = keyboard.read();
-          panel.update(mapper.getDebug(), signal.lane, 'keyboard');
         }
+        panel.update(mapper.getDebug(), signal.lane, mode);
 
-        if (game.getState() === 'over') {
-          keyboard.reset();
-          game.reset(Math.floor(nowMs) % 100000, nowMs);
-          return;
-        }
         game.step(signal, nowMs);
         game.render();
-      })(performance.now());
+
+        if (game.getState() === 'over') {
+          showBanner(null);
+          finishGame();
+        }
+      }
+
+      show(startScreen);
+      loadRanking();
+      requestAnimationFrame(loop);
+    }
+
+    // 부트 분기는 파일 맨 끝이어야 한다. 위로 올리면 boot() 이 아직 초기화되지 않은
+    // const CSRF_TOKEN / API_SCORES 를 읽어 TDZ ReferenceError 가 난다
+    if (new URLSearchParams(location.search).get('test') === '1') {
+      renderSelfTests(runSelfTests());
+    } else {
+      boot();
     }
   </script>
 </body>
