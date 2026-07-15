@@ -35,7 +35,7 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
-# 시트를 쓰지 않으므로 DB는 비운다
+# 시트만 쓰므로 DB 는 비운다
 DATABASES = {}
 
 STATIC_URL = "static/"

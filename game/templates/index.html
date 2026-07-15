@@ -17,7 +17,7 @@
     #canvas { display: block; width: 100%; height: 100%; }
     /* 웹캠은 거울이 아니다. 프리뷰를 뒤집어야 사용자의 왼쪽과 화면의 왼쪽이 맞는다 */
     #preview {
-      position: absolute; right: 16px; bottom: 16px;
+      position: absolute; right: 16px; bottom: 16px; z-index: 1;
       width: 200px; border-radius: 10px; opacity: 0.75;
       transform: scaleX(-1); border: 1px solid rgba(255,255,255,0.15);
     }
@@ -115,7 +115,7 @@
       slideThreshold: 0.5,    // 몸통 길이 대비
       baselineAlpha: 0.02,    // 기준선 추종 EMA
       laneAlpha: 0.3,         // 레인 x EMA
-      animMs: 600,
+      animMs: 600,            // Game의 JUMP_MS/SLIDE_MS와 값을 맞춰야 한다 (아래 "── Game" 섹션)
       refractoryMs: 300,
       visibilityMin: 0.5,
       laneOutLeft: 0.30,      // 가운데 → 왼쪽
@@ -250,7 +250,6 @@
         update,
         cfg,
         getDebug: () => debug,
-        isCalibrated: () => baseline !== null,
       };
     }
     // ── 셀프 테스트 — 단일 파일 제약으로 외부 러너를 못 붙이는 것에 대한 우회
@@ -416,6 +415,7 @@
     const MAX_SPEED = 55;
     const BASE_GAP = 22;          // BASE_SPEED 기준 스폰 간격
     const LANE_SPREAD = 0.26;     // 화면폭 대비 레인 간격
+    // InputMapper의 DEFAULT_CFG.animMs와 값을 맞춰야 한다 (위 "── InputMapper" 섹션)
     const JUMP_MS = 600;
     const SLIDE_MS = 600;
     const COIN_VALUE = 10;
@@ -596,9 +596,7 @@
         );
       }
 
-      function render() {
-        const W = canvas.width;
-        const H = canvas.height;
+      function render(W, H) {
         ctx.fillStyle = '#111a33';
         ctx.fillRect(0, 0, W, H * HORIZON_RATIO);
         ctx.fillStyle = '#1b2a4a';
@@ -764,6 +762,8 @@
 
       const el = (id) => root.querySelector(id);
       window.addEventListener('keydown', (e) => {
+        const t = e.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
         if (e.key === 'd' || e.key === 'D') root.classList.toggle('hidden');
       });
 
@@ -788,6 +788,8 @@
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       canvas.width = Math.floor(window.innerWidth * dpr);
       canvas.height = Math.floor(window.innerHeight * dpr);
+      // 백킹 스토어는 dpr 배 크지만 좌표는 CSS 픽셀로 다룬다. 캔버스 한 단위 = 화면 1px
+      canvas.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
     }
     window.addEventListener('resize', resizeCanvas);
     resizeCanvas();
@@ -803,12 +805,20 @@
     }
 
     async function submitScore(nickname, score) {
-      const res = await fetch(API_SCORES, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
-        body: JSON.stringify({ nickname, score }),
-      });
-      if (!res.ok) throw new Error('점수 전송 실패');
+      // 네트워크가 블랙홀이면 fetch가 영영 안 끝나 게임오버 화면이 멈춘다. 타임아웃으로 실패시킨다
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      try {
+        const res = await fetch(API_SCORES, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
+          body: JSON.stringify({ nickname, score }),
+          signal: controller.signal,
+        });
+        if (!res.ok) throw new Error('점수 전송 실패');
+      } finally {
+        clearTimeout(timeoutId);
+      }
     }
 
     function boot() {
@@ -915,7 +925,18 @@
 
       function loop(nowMs) {
         requestAnimationFrame(loop);
-        const landmarks = poseReady ? tracker.read(nowMs) : null;
+        let landmarks = null;
+        if (poseReady) {
+          try {
+            landmarks = tracker.read(nowMs);
+          } catch (e) {
+            // GPU 컨텍스트 유실 등으로 detectForVideo 가 죽어도 루프는 계속 돌아야 한다
+            console.warn('포즈 추적이 중단됐다 — 키보드로 전환한다', e);
+            poseReady = false;
+            mode = 'keyboard';
+            showBanner('카메라가 중단됐습니다. 화살표 키로 조작하세요');
+          }
+        }
 
         if (phase === 'countdown') {
           const left = Math.max(0, countdownEndMs - nowMs);
@@ -949,7 +970,7 @@
         panel.update(mapper.getDebug(), signal.lane, mode);
 
         game.step(signal, nowMs);
-        game.render();
+        game.render(window.innerWidth, window.innerHeight);
 
         if (game.getState() === 'over') {
           showBanner(null);

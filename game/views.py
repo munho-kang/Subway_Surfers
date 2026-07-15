@@ -1,11 +1,14 @@
 # index.html 서빙과 랭킹 조회/등록 뷰
 import json
+import logging
 
 from django.http import JsonResponse
 from django.shortcuts import render
 from django.views.decorators.http import require_http_methods
 
 from . import sheets
+
+logger = logging.getLogger(__name__)
 
 NICKNAME_MAX = 12
 
@@ -26,6 +29,7 @@ def _get_scores():
         return JsonResponse({"scores": sheets.top_scores(10)})
     except Exception:
         # 시트는 부가 기능이다. 실패를 응답으로 바꾸고 게임은 계속 돌게 한다
+        logger.exception("랭킹 조회 실패")
         return JsonResponse({"error": "랭킹을 불러올 수 없습니다"}, status=503)
 
 
@@ -52,6 +56,7 @@ def _post_score(request):
     try:
         sheets.append_score(nickname, score)
     except Exception:
+        logger.exception("점수 저장 실패")
         return JsonResponse({"error": "점수를 저장할 수 없습니다"}, status=503)
 
     return JsonResponse({"ok": True})
