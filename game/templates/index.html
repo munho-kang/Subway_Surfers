@@ -15,12 +15,16 @@
     }
     #stage { position: relative; width: 100vw; height: 100vh; }
     #canvas { display: block; width: 100%; height: 100%; }
-    /* 웹캠은 거울이 아니다. 프리뷰를 뒤집어야 사용자의 왼쪽과 화면의 왼쪽이 맞는다 */
-    #preview {
+    #cam {
       position: absolute; right: 16px; bottom: 16px; z-index: 1;
-      width: 200px; border-radius: 10px; opacity: 0.75;
-      transform: scaleX(-1); border: 1px solid rgba(255,255,255,0.15);
+      width: 200px; border-radius: 10px; overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.15); line-height: 0;
     }
+    /* 웹캠은 거울이 아니다. 프리뷰를 뒤집어야 사용자의 왼쪽과 화면의 왼쪽이 맞는다 */
+    #preview { display: block; width: 100%; opacity: 0.75; transform: scaleX(-1); }
+    /* 오버레이는 뒤집지 않는다. laneX = 1 - hip.x 가 이미 거울 좌표라 그대로 x 로 쓰면
+       맞고, 여기에 scaleX(-1) 을 걸면 선은 맞아도 글자가 뒤집힌다 */
+    #overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
     #debug {
       position: absolute; left: 16px; bottom: 16px;
       width: 260px; padding: 12px 14px; border-radius: 10px;
@@ -72,7 +76,10 @@
 <body>
   <div id="stage">
     <canvas id="canvas"></canvas>
-    <video id="preview" playsinline muted class="hidden"></video>
+    <div id="cam" class="hidden">
+      <video id="preview" playsinline muted></video>
+      <canvas id="overlay"></canvas>
+    </div>
     <div id="banner"></div>
     <div id="debug" class="hidden"></div>
 
@@ -234,7 +241,14 @@
           baseline.eyeY += cfg.baselineAlpha * (m.eye.y - baseline.eyeY);
         }
 
-        debug = { jumpAmount, slideAmount, laneX: smoothedLaneX, ankleVisibility };
+        // 기준선과 몸통 길이는 프리뷰 오버레이가 임계선을 그리는 데 쓴다.
+        // 판정이 매 프레임의 torsoLen 으로 이뤄지므로 오버레이도 같은 값을 써야
+        // 화면의 선과 실제 판정 경계가 어긋나지 않는다
+        debug = {
+          jumpAmount, slideAmount, laneX: smoothedLaneX, ankleVisibility,
+          baselineAnkleY: baseline.ankleY, baselineEyeY: baseline.eyeY,
+          torsoLen: m.torsoLen,
+        };
         lastSignal = {
           lane,
           jump,
@@ -773,6 +787,7 @@
       });
 
       return {
+        isVisible: () => !root.classList.contains('hidden'),
         update(debug, lane, mode) {
           if (root.classList.contains('hidden')) return;
           el('#d-jump').textContent = debug.jumpAmount.toFixed(3);
@@ -785,6 +800,77 @@
           el('#d-mode').textContent = mode;
         },
       };
+    }
+    // ── 프리뷰 오버레이 — 임계선을 몸 위에 직접 겹친다. 숫자보다 몸이 먼저 안다
+    function createPreviewOverlay(canvasEl, cfg) {
+      const ctx = canvasEl.getContext('2d');
+      let w = 0;
+      let h = 0;
+
+      // 숨어 있는 동안에는 rect 가 0 이라 크기를 못 잡는다. 그래서 보일 때 늦게 잡는다
+      function fit() {
+        const rect = canvasEl.getBoundingClientRect();
+        if (rect.width === 0) return false;
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        w = rect.width;
+        h = rect.height;
+        canvasEl.width = Math.floor(w * dpr);
+        canvasEl.height = Math.floor(h * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);   // 백킹 스토어만 키우면 선이 절반 크기로 그려진다
+        return true;
+      }
+
+      function hline(yNorm, color, label) {
+        const y = yNorm * h;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+        ctx.fillStyle = color;
+        ctx.fillText(label, 4, y - 3);
+      }
+
+      function vline(xNorm, color, dash) {
+        ctx.save();
+        ctx.setLineDash(dash);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(xNorm * w, 0);
+        ctx.lineTo(xNorm * w, h);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      function clear() {
+        if (w) ctx.clearRect(0, 0, w, h);
+      }
+
+      function draw(d) {
+        if (!w && !fit()) return;
+        ctx.clearRect(0, 0, w, h);
+        // 캘리브레이션 전이거나 몸을 못 찾은 프레임 — 그릴 기준선이 없다
+        if (d.torsoLen == null) return;
+        ctx.font = '10px ui-monospace, Menlo, monospace';
+
+        // 발목이 이 선 위로 올라가면 점프, 눈이 이 선 아래로 내려가면 슬라이드
+        hline(d.baselineAnkleY - cfg.jumpThreshold * d.torsoLen, '#7ef6a0', '점프');
+        hline(d.baselineEyeY + cfg.slideThreshold * d.torsoLen, '#ffd166', '슬라이드');
+
+        // 실선은 가운데서 나가는 경계, 점선은 가운데로 돌아오는 경계다.
+        // 둘 사이 간격이 곧 레인 떨림을 막는 히스테리시스 폭이다
+        vline(cfg.laneOutLeft, '#6cc5ff', []);
+        vline(cfg.laneInLeft, 'rgba(108,197,255,0.5)', [3, 3]);
+        vline(cfg.laneInRight, 'rgba(108,197,255,0.5)', [3, 3]);
+        vline(cfg.laneOutRight, '#6cc5ff', []);
+      }
+
+      // 창 크기가 바뀌면 dpr 이 달라질 수 있다. 다음 draw 에서 다시 잡게 한다
+      function invalidate() { w = 0; }
+
+      return { draw, clear, invalidate };
     }
     // ── 화면 전환·API·부트
     const canvas = document.getElementById('canvas');
@@ -834,12 +920,16 @@
       const banner = el('banner');
       const toast = el('toast');
       const preview = el('preview');
+      const cam = el('cam');
 
       const game = createGame(canvas);
       const keyboard = createKeyboardSource();
       const mapper = createInputMapper();
       const tracker = createPoseTracker();
       const panel = mountDebugPanel(mapper);
+      // cfg 객체를 그대로 넘긴다 — 슬라이더가 이 객체를 제자리에서 바꾸므로 선이 즉시 따라온다
+      const overlay = createPreviewOverlay(el('overlay'), mapper.cfg);
+      window.addEventListener('resize', () => overlay.invalidate());
 
       let mode = 'keyboard';
       let poseReady = false;   // 세션 동안 카메라 파이프라인이 살아있는지. mode 는 라운드마다 결정된다
@@ -889,7 +979,7 @@
       (async () => {
         try {
           await tracker.start(preview);
-          preview.classList.remove('hidden');
+          cam.classList.remove('hidden');
           poseReady = true;
         } catch (e) {
           console.warn('포즈 모드 불가 — 키보드로 진행한다', e);
@@ -910,6 +1000,9 @@
 
       async function finishGame() {
         phase = 'gameover';
+        // 여기서 지우지 않으면 루프가 'playing' 이 아니라 일찍 빠져나가는 동안
+        // 마지막 프레임의 선이 프리뷰에 얼어붙어 살아있는 것처럼 보인다
+        overlay.clear();
         const score = game.getScore();
         el('final-score').textContent = `${score}점`;
         el('submit-state').textContent = '점수를 보내는 중…';
@@ -973,6 +1066,9 @@
           signal = keyboard.read();
         }
         panel.update(mapper.getDebug(), signal.lane, mode);
+        // 오버레이는 튜닝 도구다. 디버그 패널과 토글을 공유한다 (D 키)
+        if (panel.isVisible() && mode === 'pose') overlay.draw(mapper.getDebug());
+        else overlay.clear();
 
         game.step(signal, nowMs);
         game.render(window.innerWidth, window.innerHeight);
