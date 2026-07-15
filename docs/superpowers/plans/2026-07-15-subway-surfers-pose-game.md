@@ -477,6 +477,18 @@ def test_post_rejects_long_nickname(client):
     assert worksheet.append_row.call_count == 0
 
 
+def test_post_rejects_non_dict_body(client):
+    # json.loads 를 통과하지만 dict 가 아닌 본문들이다
+    for body in ["null", "42", '"x"', "[1,2,3]"]:
+        worksheet = _mock_worksheet()
+        with patch.object(sheets, "_worksheet", return_value=worksheet):
+            response = client.post(
+                "/api/scores/", data=body, content_type="application/json"
+            )
+        assert response.status_code == 400, f"본문 {body} 가 400 이 아니다"
+        assert worksheet.append_row.call_count == 0
+
+
 def test_post_rejects_non_integer_score(client):
     worksheet = _mock_worksheet()
     with patch.object(sheets, "_worksheet", return_value=worksheet):
@@ -593,6 +605,11 @@ def _post_score(request):
     except (ValueError, TypeError):
         return JsonResponse({"error": "잘못된 요청입니다"}, status=400)
 
+    # json.loads 는 null, 42, "x", [1,2,3] 도 통과시킨다.
+    # 이 가드가 없으면 payload.get() 이 AttributeError 를 내고 400 이 아니라 500 이 된다
+    if not isinstance(payload, dict):
+        return JsonResponse({"error": "잘못된 요청입니다"}, status=400)
+
     nickname = str(payload.get("nickname", "")).strip()
     if not 1 <= len(nickname) <= NICKNAME_MAX:
         return JsonResponse(
@@ -629,7 +646,7 @@ urlpatterns = [
 - [ ] **Step 5: 테스트를 돌려 통과를 확인한다**
 
 Run: `.venv/bin/pytest -q`
-Expected: `7 passed`
+Expected: `8 passed`
 
 - [ ] **Step 6: 커밋**
 
@@ -1943,7 +1960,7 @@ Expected: 랭킹 자리에 "불러올 수 없음"이 뜨지만 게임은 정상 
 - [ ] **Step 6: 전체 테스트를 돌린다**
 
 Run: `.venv/bin/pytest -q`
-Expected: `7 passed`
+Expected: `8 passed`
 
 `http://localhost:8000/?test=1`
 Expected: `7 / 7 통과`
@@ -1959,7 +1976,7 @@ git commit -m "feat: 시작 화면과 랭킹 연동으로 전체 흐름 완성"
 
 ## 완료 기준
 
-- [ ] `.venv/bin/pytest -q` → 7 passed
+- [ ] `.venv/bin/pytest -q` → 8 passed
 - [ ] `/?test=1` → 7 / 7 통과
 - [ ] 카메라로 좌우 이동·점프·슬라이드가 모두 동작한다
 - [ ] 카메라를 거부해도 화살표 키로 완주할 수 있다
