@@ -89,7 +89,7 @@ context-notes.md                    # 결정 기록 (Task 1·3 에서 갱신)
 - Test: `game/templates/index.html` 안의 `runSelfTests` (브라우저 `?test=1`, 개발 중엔 node 하네스)
 
 **Interfaces:**
-- Produces: `debug` 객체가 `{ headRise, peakHeadRise, laneX, baselineEyeY, torsoLen }` 를 내보낸다. `jumpAmount` / `slideAmount` / `ankleVisibility` / `baselineAnkleY` 는 **사라진다.** Task 2 의 디버그 패널이 `peakHeadRise` 를 읽는다.
+- Produces: `debug` 객체가 `{ headRise, laneX, baselineEyeY, torsoLen }` 를 내보낸다. `jumpAmount` / `slideAmount` / `ankleVisibility` / `baselineAnkleY` 는 **사라진다.** `peakHeadRise` 는 이 태스크가 아니라 Task 2 가 추가한다 — 여기서 넣지 않는다.
 - Produces: `mapper.update(lm, nowMs)` 의 반환 계약 `{ lane, jump, slide, warning }` 은 **바뀌지 않는다.** Game 과 키보드 모드는 손대지 않는다.
 
 - [ ] **Step 1: 기준선을 확인한다**
