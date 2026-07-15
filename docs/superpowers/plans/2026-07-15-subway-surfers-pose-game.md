@@ -108,7 +108,6 @@ weniv_project/
 - Create: `config/__init__.py`, `config/settings.py`, `config/urls.py`, `config/wsgi.py`
 - Create: `game/__init__.py`, `game/urls.py`, `game/views.py`, `game/templates/index.html`
 - Create: `game/tests/__init__.py`, `game/tests/test_api.py`
-- Modify: `.gitignore`
 
 **Interfaces:**
 - Consumes: 없음
@@ -337,12 +336,8 @@ def index(request):
 </html>
 ```
 
-`.gitignore`에 아래 두 줄을 추가한다. 나머지 기존 내용은 건드리지 않는다.
-
-```
-.probe/
-checklist.md.bak
-```
+`.gitignore`는 이미 `credentials.json`, `__pycache__/`, `*.pyc`, `db.sqlite3`, `.venv/`,
+`.superpowers/`를 담고 있다. 손대지 않는다.
 
 - [ ] **Step 5: 테스트를 돌려 통과를 확인한다**
 
