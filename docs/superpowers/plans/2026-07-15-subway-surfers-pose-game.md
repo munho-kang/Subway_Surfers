@@ -35,7 +35,11 @@
 
 InputMapper가 내보내는 `jump` / `slide`는 **트리거된 그 한 프레임에만 `true`** 다. 600ms 애니메이션의 소유자는 Game이고, 900ms 불응기(애니메이션 600 + 잠금 300)의 소유자는 InputMapper다.
 
-이 분리를 지키는 이유가 있다. 설계 문서의 셀프 테스트 기준이 "jump가 **정확히 1회 발화**한다"이므로 상태 방식이면 여러 프레임 `true`가 되어 셀 수 없다. 또한 Game이 애니메이션 길이를 소유해야 InputMapper의 타이밍 상수와 게임 연출이 서로 얽히지 않는다. 키보드 소스도 동일한 엣지 의미를 따른다.
+이 분리를 지키는 이유가 있다. 설계 문서의 셀프 테스트 기준이 "jump가 **정확히 1회 발화**한다"이므로 상태 방식이면 여러 프레임 `true`가 되어 셀 수 없다. 또한 Game이 애니메이션 길이를 소유해야 InputMapper의 타이밍 상수와 게임 연출이 서로 얽히지 않는다.
+
+키보드 소스는 **엣지 의미만 따르고 불응기는 갖지 않는다.** 여기서 "동일한 엣지 의미"란 jump/slide가 한 프레임짜리 펄스라는 뜻이지, 900ms 잠금을 복제한다는 뜻이 아니다. 불응기는 InputMapper만 소유한다.
+
+이것은 누락이 아니라 결정이다. 불응기의 존재 이유는 물리적 점프 한 번이 여러 프레임에 걸쳐 두 번으로 세지는 것을 막는 디바운스다. 키 입력은 이미 이산적이라 걸러낼 노이즈가 없고, 인위적 잠금은 키보드 모드를 이유 없이 둔하게 만들 뿐이다. 체감 차이(포즈 0.9초 vs 키보드 0.6초)가 난이도를 왜곡하지도 않는다. 스폰 그룹 간 반응 시간이 `BASE_GAP / BASE_SPEED = 22 / 18 = 1.22초`로 속도와 무관하게 일정하고, 0.9초도 0.6초도 그 안에 들어가 클리어 가능성에 영향이 없다.
 
 ## File Structure
 
@@ -108,7 +112,6 @@ weniv_project/
 - Create: `config/__init__.py`, `config/settings.py`, `config/urls.py`, `config/wsgi.py`
 - Create: `game/__init__.py`, `game/urls.py`, `game/views.py`, `game/templates/index.html`
 - Create: `game/tests/__init__.py`, `game/tests/test_api.py`
-- Modify: `.gitignore`
 
 **Interfaces:**
 - Consumes: 없음
@@ -170,7 +173,9 @@ python_files = test_*.py
 - [ ] **Step 3: 테스트를 돌려 실패를 확인한다**
 
 Run: `.venv/bin/pytest -q`
-Expected: FAIL — `ModuleNotFoundError: No module named 'config'`
+Expected: FAIL — `ImportError: No module named 'config'`에 이어
+`pytest-django could not find a Django project`. pytest-django 가 자체 래퍼에서
+`ImportError`로 바꿔 던지므로 `ModuleNotFoundError`가 아니다.
 
 - [ ] **Step 4: 스캐폴드를 작성한다**
 
@@ -337,12 +342,8 @@ def index(request):
 </html>
 ```
 
-`.gitignore`에 아래 두 줄을 추가한다. 나머지 기존 내용은 건드리지 않는다.
-
-```
-.probe/
-checklist.md.bak
-```
+`.gitignore`는 이미 `credentials.json`, `__pycache__/`, `*.pyc`, `db.sqlite3`, `.venv/`,
+`.superpowers/`를 담고 있다. 손대지 않는다.
 
 - [ ] **Step 5: 테스트를 돌려 통과를 확인한다**
 
@@ -480,6 +481,18 @@ def test_post_rejects_long_nickname(client):
     assert worksheet.append_row.call_count == 0
 
 
+def test_post_rejects_non_dict_body(client):
+    # json.loads 를 통과하지만 dict 가 아닌 본문들이다
+    for body in ["null", "42", '"x"', "[1,2,3]"]:
+        worksheet = _mock_worksheet()
+        with patch.object(sheets, "_worksheet", return_value=worksheet):
+            response = client.post(
+                "/api/scores/", data=body, content_type="application/json"
+            )
+        assert response.status_code == 400, f"본문 {body} 가 400 이 아니다"
+        assert worksheet.append_row.call_count == 0
+
+
 def test_post_rejects_non_integer_score(client):
     worksheet = _mock_worksheet()
     with patch.object(sheets, "_worksheet", return_value=worksheet):
@@ -596,6 +609,11 @@ def _post_score(request):
     except (ValueError, TypeError):
         return JsonResponse({"error": "잘못된 요청입니다"}, status=400)
 
+    # json.loads 는 null, 42, "x", [1,2,3] 도 통과시킨다.
+    # 이 가드가 없으면 payload.get() 이 AttributeError 를 내고 400 이 아니라 500 이 된다
+    if not isinstance(payload, dict):
+        return JsonResponse({"error": "잘못된 요청입니다"}, status=400)
+
     nickname = str(payload.get("nickname", "")).strip()
     if not 1 <= len(nickname) <= NICKNAME_MAX:
         return JsonResponse(
@@ -632,7 +650,7 @@ urlpatterns = [
 - [ ] **Step 5: 테스트를 돌려 통과를 확인한다**
 
 Run: `.venv/bin/pytest -q`
-Expected: `7 passed`
+Expected: `8 passed`
 
 - [ ] **Step 6: 커밋**
 
@@ -1281,6 +1299,11 @@ function createKeyboardSource() {
   let slide = false;
 
   window.addEventListener('keydown', (e) => {
+    // 닉네임 입력창에서 스페이스와 화살표를 뺏으면 안 된다.
+    // 이 가드가 없으면 "홍길 동" 이 "홍길동" 이 되고,
+    // 캐럿 옮기려 누른 화살표가 lane 에 눌어붙어 캐릭터가 0번 레인에서 시작한다
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
     if (e.repeat) return;
     if (e.key === 'ArrowLeft') lane = Math.max(0, lane - 1);
     else if (e.key === 'ArrowRight') lane = Math.min(2, lane + 1);
@@ -1460,10 +1483,20 @@ function createPoseTracker() {
       video: { width: 640, height: 480 },
       audio: false,
     });
-    videoEl.srcObject = stream;
-    await videoEl.play();
-    video = videoEl;
-    landmarker = await loadLandmarker();
+    try {
+      videoEl.srcObject = stream;
+      await videoEl.play();
+      landmarker = await loadLandmarker();
+      video = videoEl;   // 완전히 성공한 뒤에만 붙인다
+    } catch (e) {
+      // MediaPipe 가 죽어도 카메라는 꺼야 한다.
+      // 안 그러면 목적 없이 표시등만 세션 내내 켜져 있다
+      stream.getTracks().forEach((track) => track.stop());
+      videoEl.srcObject = null;
+      video = null;
+      landmarker = null;
+      throw e;
+    }
   }
 
   function read(nowMs) {
@@ -1773,7 +1806,8 @@ function boot() {
   const tracker = createPoseTracker();
   const panel = mountDebugPanel(mapper);
 
-  let mode = 'keyboard';
+  let mode = 'keyboard';   // 이번 라운드의 조작 모드
+  let poseReady = false;   // 세션 동안 카메라 파이프라인이 살아있는지. mode 는 라운드마다 결정된다
   let phase = 'start';
   let countdownEndMs = 0;
   let nickname = '플레이어';
@@ -1821,7 +1855,7 @@ function boot() {
     try {
       await tracker.start(preview);
       preview.classList.remove('hidden');
-      mode = 'pose';
+      poseReady = true;
     } catch (e) {
       console.warn('포즈 모드 불가 — 키보드로 진행한다', e);
       showToast('카메라를 쓸 수 없습니다. 화살표 키로 조작하세요');
@@ -1861,21 +1895,26 @@ function boot() {
 
   function loop(nowMs) {
     requestAnimationFrame(loop);
-    const landmarks = mode === 'pose' ? tracker.read(nowMs) : null;
+    const landmarks = poseReady ? tracker.read(nowMs) : null;
 
     if (phase === 'countdown') {
       const left = Math.max(0, countdownEndMs - nowMs);
       el('count').textContent = Math.ceil(left / 1000);
-      if (mode === 'pose' && landmarks) mapper.addCalibrationSample(landmarks);
+      if (poseReady && landmarks) mapper.addCalibrationSample(landmarks);
       if (left <= 0) {
-        if (mode === 'pose' && !mapper.commitCalibration()) {
-          // 5초 동안 몸을 한 번도 못 찾았다. 포즈 조작이 불가능하다
+        // 라운드마다 다시 시도한다. mode 를 세션 플래그로 쓰면 1라운드에 자세 잡는 게
+        // 늦었다는 이유만으로 그 페이지 내내 포즈 조작이 잠겨버린다
+        if (poseReady && mapper.commitCalibration()) {
+          mode = 'pose';
+        } else {
           mode = 'keyboard';
-          showToast('몸을 찾지 못했습니다. 화살표 키로 조작하세요');
+          // 카메라가 아예 없는 사람에게는 부팅 때 이미 알렸다. 매 라운드 잔소리하지 않는다
+          if (poseReady) showToast('몸을 찾지 못했습니다. 화살표 키로 조작하세요');
         }
         phase = 'playing';
         show(null);
         game.reset(Math.floor(nowMs) % 100000, nowMs);
+        keyboard.reset();   // 시작 화면에서 눌린 화살표가 새어들어오지 않게 한다
       }
       return;
     }
@@ -1946,7 +1985,7 @@ Expected: 랭킹 자리에 "불러올 수 없음"이 뜨지만 게임은 정상 
 - [ ] **Step 6: 전체 테스트를 돌린다**
 
 Run: `.venv/bin/pytest -q`
-Expected: `7 passed`
+Expected: `8 passed`
 
 `http://localhost:8000/?test=1`
 Expected: `7 / 7 통과`
@@ -1962,7 +2001,7 @@ git commit -m "feat: 시작 화면과 랭킹 연동으로 전체 흐름 완성"
 
 ## 완료 기준
 
-- [ ] `.venv/bin/pytest -q` → 7 passed
+- [ ] `.venv/bin/pytest -q` → 8 passed
 - [ ] `/?test=1` → 7 / 7 통과
 - [ ] 카메라로 좌우 이동·점프·슬라이드가 모두 동작한다
 - [ ] 카메라를 거부해도 화살표 키로 완주할 수 있다

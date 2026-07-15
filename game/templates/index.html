@@ -1,0 +1,995 @@
+<!doctype html>
+<!-- 포즈 러너 프론트엔드 전부. 게임 로직과 화면이 이 파일 하나에 들어간다 -->
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="csrf-token" content="{{ csrf_token }}" />
+  <title>포즈 러너</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: #0b1020; color: #e8ecf5;
+      font-family: system-ui, -apple-system, "Apple SD Gothic Neo", sans-serif;
+      overflow: hidden;
+    }
+    #stage { position: relative; width: 100vw; height: 100vh; }
+    #canvas { display: block; width: 100%; height: 100%; }
+    /* 웹캠은 거울이 아니다. 프리뷰를 뒤집어야 사용자의 왼쪽과 화면의 왼쪽이 맞는다 */
+    #preview {
+      position: absolute; right: 16px; bottom: 16px; z-index: 1;
+      width: 200px; border-radius: 10px; opacity: 0.75;
+      transform: scaleX(-1); border: 1px solid rgba(255,255,255,0.15);
+    }
+    #debug {
+      position: absolute; left: 16px; bottom: 16px;
+      width: 260px; padding: 12px 14px; border-radius: 10px;
+      background: rgba(8,12,26,0.85); border: 1px solid rgba(255,255,255,0.12);
+      font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    #debug h3 { margin: 0 0 8px; font-size: 12px; letter-spacing: 0.04em; }
+    #debug label { display: block; margin-top: 8px; }
+    #debug input[type=range] { width: 100%; }
+    #debug .row { display: flex; justify-content: space-between; }
+    #debug .bad { color: #ff6b6b; }
+    #debug .good { color: #7ef6a0; }
+    #banner {
+      position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+      padding: 10px 18px; border-radius: 999px; background: rgba(229,83,61,0.92);
+      font-size: 14px; font-weight: 600; display: none;
+    }
+    .screen {
+      position: absolute; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 18px;
+      background: rgba(11,16,32,0.94); text-align: center; padding: 24px;
+    }
+    .screen h1 { margin: 0; font-size: 34px; letter-spacing: -0.02em; }
+    .screen p { margin: 0; color: rgba(232,236,245,0.7); line-height: 1.7; }
+    #nickname {
+      padding: 12px 16px; width: 260px; font-size: 16px; text-align: center;
+      border-radius: 10px; border: 1px solid rgba(255,255,255,0.2);
+      background: rgba(255,255,255,0.06); color: #e8ecf5;
+    }
+    button {
+      padding: 13px 30px; font-size: 16px; font-weight: 600; cursor: pointer;
+      border-radius: 10px; border: 0; background: #7ef6a0; color: #08121f;
+    }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    #ranking { list-style: none; padding: 0; margin: 0; width: 280px; }
+    #ranking li {
+      display: flex; justify-content: space-between; padding: 7px 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.08); font-size: 14px;
+    }
+    #count { font-size: 120px; font-weight: 700; line-height: 1; }
+    #toast {
+      position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%);
+      padding: 10px 18px; border-radius: 999px; font-size: 14px;
+      background: rgba(255,255,255,0.14); display: none;
+    }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <div id="stage">
+    <canvas id="canvas"></canvas>
+    <video id="preview" playsinline muted class="hidden"></video>
+    <div id="banner"></div>
+    <div id="debug" class="hidden"></div>
+
+    <div id="start" class="screen">
+      <h1>포즈 러너</h1>
+      <p>앉아서 닉네임을 넣고 시작을 누르세요.<br />
+         시작하면 5초 안에 1.5~2m 뒤로 물러나 전신이 보이게 서세요.</p>
+      <input id="nickname" maxlength="12" placeholder="닉네임 (최대 12자)" />
+      <button id="start-btn">시작</button>
+      <h3 style="margin:8px 0 0">TOP 10</h3>
+      <ol id="ranking"><li>불러오는 중…</li></ol>
+      <p style="font-size:12px">카메라를 못 쓰면 화살표 키로 조작합니다. D 키로 디버그 패널.</p>
+    </div>
+
+    <div id="countdown" class="screen hidden">
+      <p>뒤로 물러나 가만히 서세요</p>
+      <div id="count">5</div>
+      <p>이 자세를 기준으로 잡습니다</p>
+    </div>
+
+    <div id="gameover" class="screen hidden">
+      <h1 id="final-score">0점</h1>
+      <p id="submit-state">점수를 보내는 중…</p>
+    </div>
+
+    <div id="toast"></div>
+  </div>
+  <script type="module">
+    // ── 상수·랜드마크 인덱스·공용 헬퍼
+    // MediaPipe 랜드마크 인덱스. 좌우 쌍은 중점을 쓴다
+    const LM = {
+      EYE_L: 2, EYE_R: 5,
+      SHO_L: 11, SHO_R: 12,
+      HIP_L: 23, HIP_R: 24,
+      ANK_L: 27, ANK_R: 28,
+    };
+
+    const DEFAULT_CFG = {
+      jumpThreshold: 0.2,     // 몸통 길이 대비
+      slideThreshold: 0.5,    // 몸통 길이 대비
+      baselineAlpha: 0.02,    // 기준선 추종 EMA
+      laneAlpha: 0.3,         // 레인 x EMA
+      animMs: 600,            // Game의 JUMP_MS/SLIDE_MS와 값을 맞춰야 한다 (아래 "── Game" 섹션)
+      refractoryMs: 300,
+      visibilityMin: 0.5,
+      laneOutLeft: 0.30,      // 가운데 → 왼쪽
+      laneOutRight: 0.70,     // 가운데 → 오른쪽
+      laneInLeft: 0.36,       // 왼쪽 → 가운데
+      laneInRight: 0.64,      // 오른쪽 → 가운데
+    };
+
+    function midpoint(a, b) {
+      return {
+        x: (a.x + b.x) / 2,
+        y: (a.y + b.y) / 2,
+        visibility: Math.min(a.visibility ?? 1, b.visibility ?? 1),
+      };
+    }
+
+    // y는 아래로 갈수록 커진다. 위로 올라감 = y 감소
+    function poseMetrics(lm) {
+      const shoulder = midpoint(lm[LM.SHO_L], lm[LM.SHO_R]);
+      const hip = midpoint(lm[LM.HIP_L], lm[LM.HIP_R]);
+      const eye = midpoint(lm[LM.EYE_L], lm[LM.EYE_R]);
+      const ankle = midpoint(lm[LM.ANK_L], lm[LM.ANK_R]);
+      const torsoLen = Math.abs(shoulder.y - hip.y);
+      return { shoulder, hip, eye, ankle, torsoLen };
+    }
+    // ── InputMapper — 랜드마크를 조작 신호로 바꾼다. 카메라도 게임도 모른다
+    function createInputMapper(overrides = {}) {
+      const cfg = { ...DEFAULT_CFG, ...overrides };
+      let baseline = null;          // { ankleY, eyeY }
+      let calibSamples = [];
+      let smoothedLaneX = null;
+      let lane = 1;
+      let lockUntilMs = 0;
+      let jumpWasOver = false;
+      let slideWasOver = false;
+      let lastSignal = { lane: 1, jump: false, slide: false, warning: null };
+      let debug = { jumpAmount: 0, slideAmount: 0, laneX: 0.5, ankleVisibility: 1 };
+
+      function addCalibrationSample(lm) {
+        if (!lm) return;
+        const m = poseMetrics(lm);
+        if (m.torsoLen < 1e-6) return;
+        calibSamples.push({ ankleY: m.ankle.y, eyeY: m.eye.y });
+      }
+
+      function commitCalibration() {
+        if (calibSamples.length === 0) return false;
+        const n = calibSamples.length;
+        baseline = {
+          ankleY: calibSamples.reduce((s, c) => s + c.ankleY, 0) / n,
+          eyeY: calibSamples.reduce((s, c) => s + c.eyeY, 0) / n,
+        };
+        calibSamples = [];
+        return true;
+      }
+
+      function hold(warning) {
+        lastSignal = { lane: lastSignal.lane, jump: false, slide: false, warning };
+        return lastSignal;
+      }
+
+      function update(lm, nowMs) {
+        if (!lm) return hold('포즈를 찾을 수 없습니다');
+        if (!baseline) return hold('캘리브레이션 전입니다');
+
+        const m = poseMetrics(lm);
+        if (m.torsoLen < 1e-6) return hold('포즈를 찾을 수 없습니다');
+
+        // 레인 — 웹캠은 거울이 아니므로 뒤집는다. 엉덩이 중점을 쓴다 (머리는 흔들린다)
+        const laneX = 1 - m.hip.x;
+        smoothedLaneX = smoothedLaneX === null
+          ? laneX
+          : smoothedLaneX + cfg.laneAlpha * (laneX - smoothedLaneX);
+        if (lane === 1) {
+          if (smoothedLaneX < cfg.laneOutLeft) lane = 0;
+          else if (smoothedLaneX > cfg.laneOutRight) lane = 2;
+        } else if (lane === 0) {
+          if (smoothedLaneX > cfg.laneInLeft) lane = 1;
+        } else {
+          if (smoothedLaneX < cfg.laneInRight) lane = 1;
+        }
+
+        // 몸통 길이로 나눠 거리 변화에 무관하게 만든다.
+        // 발목 y 에는 EMA 를 걸지 않는다. 빠뜨린 게 아니라 의도적이다 —
+        // 점프는 짧고 빠른 순간 신호라 스무딩하면 봉우리가 뭉개져 감지 자체가 안 된다
+        const jumpAmount = (baseline.ankleY - m.ankle.y) / m.torsoLen;   // 발목이 뜨면 양수
+        const slideAmount = (m.eye.y - baseline.eyeY) / m.torsoLen;      // 머리가 내려가면 양수
+        const ankleVisibility = m.ankle.visibility;
+        const ankleOk = ankleVisibility >= cfg.visibilityMin;
+
+        // 상승 엣지에서만 발화한다. 발화 후 애니메이션+불응기 동안 잠근다
+        const locked = nowMs < lockUntilMs;
+        const jumpOver = ankleOk && jumpAmount > cfg.jumpThreshold;
+        const slideOver = slideAmount > cfg.slideThreshold;
+        let jump = false;
+        let slide = false;
+        if (!locked) {
+          if (jumpOver && !jumpWasOver) {
+            jump = true;
+            lockUntilMs = nowMs + cfg.animMs + cfg.refractoryMs;
+          } else if (slideOver && !slideWasOver) {
+            slide = true;
+            lockUntilMs = nowMs + cfg.animMs + cfg.refractoryMs;
+          }
+        }
+        jumpWasOver = jumpOver;
+        slideWasOver = slideOver;
+
+        // 기준선 추종 — 판정 중에는 절대 갱신하지 않는다.
+        // 이 가드가 없으면 슬라이드 자세가 기준선으로 굳어 슬라이드가 영영 안 먹는다
+        const quiet =
+          Math.abs(jumpAmount) < cfg.jumpThreshold / 2 &&
+          Math.abs(slideAmount) < cfg.slideThreshold / 2;
+        if (quiet && !locked && !jump && !slide) {
+          baseline.ankleY += cfg.baselineAlpha * (m.ankle.y - baseline.ankleY);
+          baseline.eyeY += cfg.baselineAlpha * (m.eye.y - baseline.eyeY);
+        }
+
+        debug = { jumpAmount, slideAmount, laneX: smoothedLaneX, ankleVisibility };
+        lastSignal = {
+          lane,
+          jump,
+          slide,
+          warning: ankleOk ? null : '발이 화면에 보이지 않습니다',
+        };
+        return lastSignal;
+      }
+
+      return {
+        addCalibrationSample,
+        commitCalibration,
+        update,
+        cfg,
+        getDebug: () => debug,
+      };
+    }
+    // ── 셀프 테스트 — 단일 파일 제약으로 외부 러너를 못 붙이는 것에 대한 우회
+    function makePose({
+      hipX = 0.5,
+      eyeY = 0.10,
+      shoulderY = 0.30,
+      hipY = 0.55,
+      ankleY = 0.90,
+      visibility = 1.0,
+      ankleVisibility = null,
+    } = {}) {
+      const av = ankleVisibility === null ? visibility : ankleVisibility;
+      const lm = Array.from({ length: 33 }, () => ({ x: hipX, y: 0.5, z: 0, visibility }));
+      lm[LM.EYE_L] = { x: hipX - 0.02, y: eyeY, z: 0, visibility };
+      lm[LM.EYE_R] = { x: hipX + 0.02, y: eyeY, z: 0, visibility };
+      lm[LM.SHO_L] = { x: hipX - 0.08, y: shoulderY, z: 0, visibility };
+      lm[LM.SHO_R] = { x: hipX + 0.08, y: shoulderY, z: 0, visibility };
+      lm[LM.HIP_L] = { x: hipX - 0.05, y: hipY, z: 0, visibility };
+      lm[LM.HIP_R] = { x: hipX + 0.05, y: hipY, z: 0, visibility };
+      lm[LM.ANK_L] = { x: hipX - 0.05, y: ankleY, z: 0, visibility: av };
+      lm[LM.ANK_R] = { x: hipX + 0.05, y: ankleY, z: 0, visibility: av };
+      return lm;
+    }
+
+    function runSelfTests() {
+      const results = [];
+      const assert = (cond, msg) => { if (!cond) throw new Error(msg); };
+
+      function check(name, fn) {
+        try { fn(); results.push({ name, ok: true }); }
+        catch (e) { results.push({ name, ok: false, msg: e.message }); }
+      }
+
+      // 프레임 시퀀스를 흘려보내고 발화 횟수를 센다
+      function feed(mapper, poses, startMs = 0, stepMs = 33) {
+        let jumps = 0, slides = 0, lane = 1;
+        poses.forEach((p, i) => {
+          const s = mapper.update(p, startMs + i * stepMs);
+          if (s.jump) jumps++;
+          if (s.slide) slides++;
+          lane = s.lane;
+        });
+        return { jumps, slides, lane };
+      }
+
+      function calibrated(makeStand = () => makePose(), overrides) {
+        const m = createInputMapper(overrides);
+        for (let i = 0; i < 30; i++) m.addCalibrationSample(makeStand());
+        m.commitCalibration();
+        return m;
+      }
+
+      const stand = () => makePose();
+
+      check('점프 시퀀스에서 jump가 정확히 1회 발화한다', () => {
+        // 0.90 → 0.83 은 0.07/0.25 = 0.28 몸통. 임계 0.2 를 넘는다
+        const m = calibrated();
+        const seq = [
+          stand(), stand(), stand(),
+          makePose({ ankleY: 0.86 }),   // 0.16 몸통 — 아직 아니다
+          makePose({ ankleY: 0.83 }),   // 0.28 몸통 — 여기서 발화
+          makePose({ ankleY: 0.84 }),   // 0.24 몸통 — 여전히 넘지만 새 엣지가 아니다
+          stand(), stand(), stand(),
+        ];
+        const r = feed(m, seq);
+        assert(r.jumps === 1, `jump ${r.jumps}회 발화 (기대 1)`);
+      });
+
+      check('슬라이드 시퀀스에서 slide가 정확히 1회 발화한다', () => {
+        // 눈 0.10 → 0.26 은 0.16/0.25 = 0.64 몸통. 임계 0.5 를 넘는다
+        const m = calibrated();
+        const seq = [
+          stand(),
+          makePose({ eyeY: 0.20 }),   // 0.40 몸통 — 아직 아니다
+          makePose({ eyeY: 0.26 }),   // 0.64 몸통 — 여기서 발화
+          makePose({ eyeY: 0.22 }),
+          stand(), stand(),
+        ];
+        const r = feed(m, seq);
+        assert(r.slides === 1, `slide ${r.slides}회 발화 (기대 1)`);
+        assert(r.jumps === 0, `슬라이드인데 jump가 ${r.jumps}회 발화했다`);
+      });
+
+      check('불응기 안의 두 번째 점프는 무시된다', () => {
+        const m = calibrated();
+        const pulse = [makePose({ ankleY: 0.83 }), stand()];
+        // 약 130ms 안에 두 번. 불응기 900ms 이므로 1회만 나와야 한다
+        const r = feed(m, [stand(), ...pulse, ...pulse]);
+        assert(r.jumps === 1, `jump ${r.jumps}회 발화 (기대 1)`);
+      });
+
+      check('레인 이동이 좌·중·우로 올바르게 판정된다', () => {
+        // laneX = 1 - hipX 이므로 hipX 0.85 → laneX 0.15 → 왼쪽
+        const left = feed(calibrated(), Array.from({ length: 30 }, () => makePose({ hipX: 0.85 })));
+        assert(left.lane === 0, `왼쪽 기대 0, 실제 ${left.lane}`);
+        const mid = feed(calibrated(), Array.from({ length: 30 }, () => makePose({ hipX: 0.50 })));
+        assert(mid.lane === 1, `가운데 기대 1, 실제 ${mid.lane}`);
+        const right = feed(calibrated(), Array.from({ length: 30 }, () => makePose({ hipX: 0.15 })));
+        assert(right.lane === 2, `오른쪽 기대 2, 실제 ${right.lane}`);
+      });
+
+      check('경계에서 미세하게 흔들 때 레인이 떨리지 않는다', () => {
+        const m = calibrated();
+        feed(m, Array.from({ length: 20 }, () => stand()));   // 가운데서 안정
+        let flips = 0;
+        let prev = 1;
+        for (let i = 0; i < 40; i++) {
+          // hipX 0.695/0.705 → laneX 0.305/0.295. 경계 0.30 을 사이에 두고 진동한다
+          const hipX = 0.695 + (i % 2) * 0.01;
+          const s = m.update(makePose({ hipX }), 2000 + i * 33);
+          if (s.lane !== prev) { flips++; prev = s.lane; }
+        }
+        assert(flips <= 1, `레인이 ${flips}회 바뀌었다 (기대 1회 이하)`);
+      });
+
+      check('앞뒤로 움직여 스케일이 변해도 판정이 유지된다', () => {
+        // 멀리 선 사람 — 몸통 길이가 절반(0.125)이다. 같은 비율의 점프는 여전히 감지돼야 한다
+        const far = (o = {}) =>
+          makePose({ shoulderY: 0.40, hipY: 0.525, ankleY: 0.70, eyeY: 0.35, ...o });
+        const m = calibrated(far);
+        // 0.70 → 0.67 은 0.03/0.125 = 0.24 몸통. 가까이 있을 때와 같은 비율이다
+        const r = feed(m, [far(), far({ ankleY: 0.67 }), far()]);
+        assert(r.jumps === 1, `먼 거리에서 jump ${r.jumps}회 발화 (기대 1)`);
+      });
+
+      check('발목 visibility가 낮으면 점프가 발화하지 않는다', () => {
+        const m = calibrated();
+        const seq = [
+          stand(),
+          makePose({ ankleY: 0.83, ankleVisibility: 0.2 }),
+          makePose({ ankleY: 0.84, ankleVisibility: 0.2 }),
+          stand(),
+        ];
+        const r = feed(m, seq);
+        assert(r.jumps === 0, `visibility 낮은데 jump가 ${r.jumps}회 발화했다`);
+      });
+
+      return results;
+    }
+
+    function renderSelfTests(results) {
+      const passed = results.filter((r) => r.ok).length;
+      const rows = results
+        .map((r) => `<li style="color:${r.ok ? '#7ef6a0' : '#ff6b6b'}">
+          ${r.ok ? 'PASS' : 'FAIL'} — ${r.name}${r.msg ? `<br><small>${r.msg}</small>` : ''}
+        </li>`)
+        .join('');
+      document.body.innerHTML = `
+        <div style="padding:24px;font-family:system-ui;line-height:1.7">
+          <h1>InputMapper 셀프 테스트</h1>
+          <p style="font-size:20px">${passed} / ${results.length} 통과</p>
+          <ul style="list-style:none;padding:0">${rows}</ul>
+        </div>`;
+    }
+    // ── Game — 조작 신호만 받아 상태를 굴리고 그린다. 포즈의 존재를 모른다
+    const Z_SPAWN = 100;          // 소실점 z
+    const Z_CHAR = 3;             // 캐릭터 z
+    const Z_DESPAWN = -5;
+    const PERSPECTIVE_K = 0.06;   // 원근 강도
+    const BASE_SPEED = 18;        // z/초
+    const SPEED_GROWTH = 0.35;    // 초당 증가
+    const MAX_SPEED = 55;
+    const BASE_GAP = 22;          // BASE_SPEED 기준 스폰 간격
+    const LANE_SPREAD = 0.26;     // 화면폭 대비 레인 간격
+    // InputMapper의 DEFAULT_CFG.animMs와 값을 맞춰야 한다 (위 "── InputMapper" 섹션)
+    const JUMP_MS = 600;
+    const SLIDE_MS = 600;
+    const COIN_VALUE = 10;
+    const HORIZON_RATIO = 0.35;
+
+    // z가 클수록 멀고 작다. z=0 에서 scale=1
+    function project(z, height) {
+      const scale = 1 / (1 + z * PERSPECTIVE_K);
+      const horizonY = height * HORIZON_RATIO;
+      return { y: horizonY + (height - horizonY) * scale, scale, horizonY };
+    }
+
+    function laneScreenX(laneFloat, scale, width) {
+      return width / 2 + (laneFloat - 1) * LANE_SPREAD * width * scale;
+    }
+
+    // 결정적 난수. 시드를 고정하면 같은 코스가 재현된다
+    function mulberry32(seed) {
+      let a = seed;
+      return function () {
+        a |= 0;
+        a = (a + 0x6d2b79f5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    function clears(kind, isJumping, isSliding) {
+      if (kind === 'barricade') return isJumping;
+      if (kind === 'beam') return isSliding;
+      return false;   // pillar — 레인을 바꾸는 수밖에 없다
+    }
+
+    // 게임은 항상 클리어 가능해야 한다.
+    // 기둥을 최대 2개로 제한하면 최소 한 레인은 기둥이 아니게 되고,
+    // 기둥 아닌 레인은 빈 레인이거나 점프/슬라이드로 통과 가능하다
+    function spawnGroup(rng, atZ) {
+      const kinds = [null, null, null];
+      const pillarCount = Math.floor(rng() * 3);   // 0, 1, 2
+      const lanes = [0, 1, 2];
+      for (let i = lanes.length - 1; i > 0; i--) {
+        const j = Math.floor(rng() * (i + 1));
+        [lanes[i], lanes[j]] = [lanes[j], lanes[i]];
+      }
+      for (let i = 0; i < pillarCount; i++) kinds[lanes[i]] = 'pillar';
+
+      for (let l = 0; l < 3; l++) {
+        if (kinds[l]) continue;
+        const r = rng();
+        if (r < 0.25) kinds[l] = 'barricade';
+        else if (r < 0.45) kinds[l] = 'beam';
+      }
+
+      const objects = [];
+      for (let l = 0; l < 3; l++) {
+        if (kinds[l]) objects.push({ kind: kinds[l], lane: l, z: atZ, dead: false });
+      }
+
+      // 코인은 완전히 빈 레인에만 둔다. 플레이어를 함정으로 유인하지 않는다
+      const emptyLanes = [0, 1, 2].filter((l) => !kinds[l]);
+      if (emptyLanes.length > 0 && rng() < 0.6) {
+        const l = emptyLanes[Math.floor(rng() * emptyLanes.length)];
+        objects.push({ kind: 'coin', lane: l, z: atZ, dead: false });
+      }
+      return objects;
+    }
+
+    function createGame(canvas) {
+      const ctx = canvas.getContext('2d');
+      let state = 'idle';
+      let lane = 1;
+      let laneVisual = 1;
+      let jumpEndMs = 0;
+      let slideEndMs = 0;
+      let speed = BASE_SPEED;
+      let distance = 0;
+      let coins = 0;
+      let elapsed = 0;
+      let objects = [];
+      let zSinceSpawn = 0;
+      let lastMs = 0;
+      let rng = mulberry32(1);
+      let nowMs = 0;
+
+      function reset(seed = 1, startMs = 0) {
+        state = 'playing';
+        lane = 1; laneVisual = 1;
+        jumpEndMs = 0; slideEndMs = 0;
+        speed = BASE_SPEED; distance = 0; coins = 0; elapsed = 0;
+        objects = []; zSinceSpawn = 0;
+        lastMs = startMs; nowMs = startMs;
+        rng = mulberry32(seed);
+      }
+
+      function step(signal, atMs) {
+        if (state !== 'playing') return;
+        nowMs = atMs;
+        // 탭 전환 후 델타가 폭발해 장애물을 관통하는 것을 막는다
+        const dt = Math.min((atMs - lastMs) / 1000, 0.05);
+        lastMs = atMs;
+        if (dt <= 0) return;
+
+        elapsed += dt;
+        speed = Math.min(BASE_SPEED + SPEED_GROWTH * elapsed, MAX_SPEED);
+        distance += speed * dt;
+
+        lane = signal.lane;
+        const busy = atMs < jumpEndMs || atMs < slideEndMs;
+        if (signal.jump && !busy) jumpEndMs = atMs + JUMP_MS;
+        else if (signal.slide && !busy) slideEndMs = atMs + SLIDE_MS;
+        const isJumping = atMs < jumpEndMs;
+        const isSliding = atMs < slideEndMs;
+
+        laneVisual += (lane - laneVisual) * Math.min(1, dt * 12);
+
+        // 속도가 오르면 간격도 벌려 반응 시간을 일정하게 유지한다
+        zSinceSpawn += speed * dt;
+        if (zSinceSpawn >= BASE_GAP * (speed / BASE_SPEED)) {
+          objects.push(...spawnGroup(rng, Z_SPAWN));
+          zSinceSpawn = 0;
+        }
+
+        for (const o of objects) {
+          const prevZ = o.z;
+          o.z -= speed * dt;
+          // 교차 판정이라 속도가 아무리 올라도 관통하지 않는다
+          if (prevZ > Z_CHAR && o.z <= Z_CHAR && o.lane === lane) {
+            if (o.kind === 'coin') {
+              coins += 1;
+              o.dead = true;
+            } else if (!clears(o.kind, isJumping, isSliding)) {
+              state = 'over';
+              return;
+            }
+          }
+        }
+        objects = objects.filter((o) => !o.dead && o.z > Z_DESPAWN);
+      }
+
+      function drawObject(o, W, H) {
+        const p = project(o.z, H);
+        if (p.scale <= 0.02) return;
+        const x = laneScreenX(o.lane, p.scale, W);
+        const w = LANE_SPREAD * W * p.scale * 0.7;
+        if (o.kind === 'coin') {
+          ctx.fillStyle = '#ffd34d';
+          ctx.beginPath();
+          ctx.arc(x, p.y - 60 * p.scale, 14 * p.scale, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (o.kind === 'barricade') {
+          ctx.fillStyle = '#e5533d';
+          ctx.fillRect(x - w / 2, p.y - 30 * p.scale, w, 30 * p.scale);
+        } else if (o.kind === 'beam') {
+          ctx.fillStyle = '#4da3ff';
+          ctx.fillRect(x - w / 2, p.y - 150 * p.scale, w, 30 * p.scale);
+        } else {
+          ctx.fillStyle = '#9b6dff';
+          ctx.fillRect(x - w / 4, p.y - 160 * p.scale, w / 2, 160 * p.scale);
+        }
+      }
+
+      function drawCharacter(W, H) {
+        const p = project(Z_CHAR, H);
+        const x = laneScreenX(laneVisual, p.scale, W);
+        let hop = 0;
+        if (nowMs < jumpEndMs) {
+          const t = 1 - (jumpEndMs - nowMs) / JUMP_MS;   // 0 → 1
+          hop = Math.sin(t * Math.PI) * 90;
+        }
+        const h = nowMs < slideEndMs ? 30 : 70;
+        ctx.fillStyle = '#7ef6a0';
+        ctx.fillRect(
+          x - 16 * p.scale,
+          p.y - (h + hop) * p.scale,
+          32 * p.scale,
+          h * p.scale
+        );
+      }
+
+      function render(W, H) {
+        ctx.fillStyle = '#111a33';
+        ctx.fillRect(0, 0, W, H * HORIZON_RATIO);
+        ctx.fillStyle = '#1b2a4a';
+        ctx.fillRect(0, H * HORIZON_RATIO, W, H * (1 - HORIZON_RATIO));
+
+        const near = project(0, H);
+        const far = project(Z_SPAWN, H);
+        ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+        ctx.lineWidth = 2;
+        for (const edge of [-0.5, 0.5, 1.5, 2.5]) {
+          ctx.beginPath();
+          ctx.moveTo(laneScreenX(edge, near.scale, W), near.y);
+          ctx.lineTo(laneScreenX(edge, far.scale, W), far.y);
+          ctx.stroke();
+        }
+
+        for (const o of [...objects].sort((a, b) => b.z - a.z)) drawObject(o, W, H);
+        drawCharacter(W, H);
+
+        ctx.fillStyle = '#e8ecf5';
+        ctx.font = '600 24px system-ui';
+        ctx.textAlign = 'left';
+        ctx.fillText(`${getScore()}점`, 24, 44);
+        ctx.font = '400 15px system-ui';
+        ctx.fillStyle = 'rgba(232,236,245,0.65)';
+        ctx.fillText(`코인 ${coins}   속도 ${speed.toFixed(0)}`, 24, 70);
+      }
+
+      const getScore = () => Math.floor(distance) + coins * COIN_VALUE;
+
+      return { reset, step, render, getState: () => state, getScore };
+    }
+
+    // ── 키보드 소스 — 개발 편의가 아니라 필수 인프라다.
+    // 게임 로직을 고칠 때마다 2m 뒤로 물러나 뛸 수는 없다.
+    // InputMapper 와 동일하게 jump/slide 는 한 프레임짜리 엣지다
+    function createKeyboardSource() {
+      let lane = 1;
+      let jump = false;
+      let slide = false;
+
+      window.addEventListener('keydown', (e) => {
+        const t = e.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+        if (e.repeat) return;
+        if (e.key === 'ArrowLeft') lane = Math.max(0, lane - 1);
+        else if (e.key === 'ArrowRight') lane = Math.min(2, lane + 1);
+        else if (e.key === 'ArrowUp' || e.key === ' ') jump = true;
+        else if (e.key === 'ArrowDown') slide = true;
+        else return;
+        e.preventDefault();
+      });
+
+      return {
+        read() {
+          const signal = { lane, jump, slide, warning: null };
+          jump = false;
+          slide = false;
+          return signal;
+        },
+        reset() { lane = 1; jump = false; slide = false; },
+      };
+    }
+    // ── PoseTracker — 카메라를 열고 랜드마크를 내보낸다. 게임의 존재를 모른다
+    const MP_VERSION = '0.10.35';
+    const MP_MODULE = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}`;
+    const MP_WASM = `${MP_MODULE}/wasm`;
+    const MP_MODEL =
+      'https://storage.googleapis.com/mediapipe-models/pose_landmarker/' +
+      'pose_landmarker_lite/float16/latest/pose_landmarker_lite.task';
+
+    function createPoseTracker() {
+      let landmarker = null;
+      let video = null;
+      let lastVideoTime = -1;
+      let lastLandmarks = null;
+
+      async function loadLandmarker() {
+        // UMD 빌드가 없어 ESM 동적 import 만 가능하다.
+        // 정적 import 로 하면 CDN 실패 시 이 모듈 전체가 죽어 키보드 폴백까지 사라진다
+        const mp = await import(MP_MODULE);
+        const fileset = await mp.FilesetResolver.forVisionTasks(MP_WASM);
+        return mp.PoseLandmarker.createFromOptions(fileset, {
+          baseOptions: { modelAssetPath: MP_MODEL, delegate: 'GPU' },
+          runningMode: 'VIDEO',
+          numPoses: 1,
+          minPoseDetectionConfidence: 0.5,
+          minPosePresenceConfidence: 0.5,
+          minTrackingConfidence: 0.5,
+        });
+      }
+
+      async function start(videoEl) {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 640, height: 480 },
+          audio: false,
+        });
+        try {
+          videoEl.srcObject = stream;
+          await videoEl.play();
+          landmarker = await loadLandmarker();
+          video = videoEl;
+        } catch (e) {
+          // MediaPipe 가 죽어도 카메라는 꺼야 한다. 안 그러면 목적 없이 표시등만 켜져 있다
+          stream.getTracks().forEach((track) => track.stop());
+          videoEl.srcObject = null;
+          video = null;
+          landmarker = null;
+          throw e;
+        }
+      }
+
+      function read(nowMs) {
+        if (!landmarker || !video || video.readyState < 2) return null;
+        // detectForVideo 는 메인 스레드를 막는다. 새 프레임일 때만 부른다
+        if (video.currentTime === lastVideoTime) return lastLandmarks;
+        lastVideoTime = video.currentTime;
+        // 타임스탬프는 필수다. 문서의 detectForVideo(video) 예제는 동작하지 않는다
+        const result = landmarker.detectForVideo(video, nowMs);
+        lastLandmarks =
+          result.landmarks && result.landmarks.length > 0 ? result.landmarks[0] : null;
+        return lastLandmarks;
+      }
+
+      return { start, read };
+    }
+    // ── 디버그 패널 — 임계값은 몸으로 해보기 전에는 맞을 수 없다
+    const TUNABLES = [
+      { key: 'jumpThreshold', label: '점프 임계', min: 0.05, max: 0.6, step: 0.01 },
+      { key: 'slideThreshold', label: '슬라이드 임계', min: 0.1, max: 1.0, step: 0.01 },
+      { key: 'baselineAlpha', label: '기준선 EMA', min: 0.0, max: 0.2, step: 0.005 },
+      { key: 'laneAlpha', label: '레인 EMA', min: 0.05, max: 1.0, step: 0.05 },
+      { key: 'visibilityMin', label: 'visibility 하한', min: 0.0, max: 0.9, step: 0.05 },
+    ];
+
+    function mountDebugPanel(mapper) {
+      const root = document.getElementById('debug');
+      root.classList.remove('hidden');
+      root.innerHTML = `
+        <h3>디버그 (D 키로 토글)</h3>
+        <div class="row"><span>점프량</span><span id="d-jump">-</span></div>
+        <div class="row"><span>슬라이드량</span><span id="d-slide">-</span></div>
+        <div class="row"><span>laneX</span><span id="d-lanex">-</span></div>
+        <div class="row"><span>확정 레인</span><span id="d-lane">-</span></div>
+        <div class="row"><span>발목 vis</span><span id="d-vis">-</span></div>
+        <div class="row"><span>모드</span><span id="d-mode">-</span></div>
+        ${TUNABLES.map((t) => `
+          <label>${t.label} <span id="v-${t.key}">${mapper.cfg[t.key]}</span>
+            <input type="range" id="s-${t.key}" min="${t.min}" max="${t.max}"
+                   step="${t.step}" value="${mapper.cfg[t.key]}" />
+          </label>`).join('')}
+      `;
+
+      for (const t of TUNABLES) {
+        const slider = root.querySelector(`#s-${t.key}`);
+        const readout = root.querySelector(`#v-${t.key}`);
+        slider.addEventListener('input', () => {
+          const value = parseFloat(slider.value);
+          mapper.cfg[t.key] = value;   // cfg 는 mapper 내부가 참조하는 바로 그 객체다
+          readout.textContent = value;
+        });
+      }
+
+      const el = (id) => root.querySelector(id);
+      window.addEventListener('keydown', (e) => {
+        const t = e.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+        if (e.key === 'd' || e.key === 'D') root.classList.toggle('hidden');
+      });
+
+      return {
+        update(debug, lane, mode) {
+          if (root.classList.contains('hidden')) return;
+          el('#d-jump').textContent = debug.jumpAmount.toFixed(3);
+          el('#d-slide').textContent = debug.slideAmount.toFixed(3);
+          el('#d-lanex').textContent = debug.laneX.toFixed(3);
+          el('#d-lane').textContent = lane;
+          const vis = el('#d-vis');
+          vis.textContent = debug.ankleVisibility.toFixed(2);
+          vis.className = debug.ankleVisibility >= mapper.cfg.visibilityMin ? 'good' : 'bad';
+          el('#d-mode').textContent = mode;
+        },
+      };
+    }
+    // ── 화면 전환·API·부트
+    const canvas = document.getElementById('canvas');
+
+    function resizeCanvas() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.floor(window.innerWidth * dpr);
+      canvas.height = Math.floor(window.innerHeight * dpr);
+      // 백킹 스토어는 dpr 배 크지만 좌표는 CSS 픽셀로 다룬다. 캔버스 한 단위 = 화면 1px
+      canvas.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // ── API — 시트는 부가 기능이다. 실패해도 게임은 계속 간다
+    const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').content;
+    const API_SCORES = '/api/scores/';
+
+    async function fetchTopScores() {
+      const res = await fetch(API_SCORES);
+      if (!res.ok) throw new Error('랭킹 조회 실패');
+      return (await res.json()).scores;
+    }
+
+    async function submitScore(nickname, score) {
+      // 네트워크가 블랙홀이면 fetch가 영영 안 끝나 게임오버 화면이 멈춘다. 타임아웃으로 실패시킨다
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      try {
+        const res = await fetch(API_SCORES, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
+          body: JSON.stringify({ nickname, score }),
+          signal: controller.signal,
+        });
+        if (!res.ok) throw new Error('점수 전송 실패');
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
+    function boot() {
+      const el = (id) => document.getElementById(id);
+      const startScreen = el('start');
+      const countdownScreen = el('countdown');
+      const gameoverScreen = el('gameover');
+      const banner = el('banner');
+      const toast = el('toast');
+      const preview = el('preview');
+
+      const game = createGame(canvas);
+      const keyboard = createKeyboardSource();
+      const mapper = createInputMapper();
+      const tracker = createPoseTracker();
+      const panel = mountDebugPanel(mapper);
+
+      let mode = 'keyboard';
+      let poseReady = false;   // 세션 동안 카메라 파이프라인이 살아있는지. mode 는 라운드마다 결정된다
+      let phase = 'start';
+      let countdownEndMs = 0;
+      let nickname = '플레이어';
+
+      // show(null) 이면 셋 다 숨는다 — 플레이 중에는 화면 오버레이가 없다
+      const show = (screen) => {
+        for (const s of [startScreen, countdownScreen, gameoverScreen]) {
+          s.classList.toggle('hidden', s !== screen);
+        }
+      };
+
+      function showBanner(text) {
+        banner.textContent = text ?? '';
+        banner.style.display = text ? 'block' : 'none';
+      }
+
+      function showToast(text) {
+        toast.textContent = text;
+        toast.style.display = 'block';
+        setTimeout(() => { toast.style.display = 'none'; }, 3000);
+      }
+
+      async function loadRanking() {
+        const list = el('ranking');
+        try {
+          const scores = await fetchTopScores();
+          list.innerHTML = scores.length
+            ? scores.map((s, i) =>
+                `<li><span>${i + 1}. ${escapeHtml(s.nickname)}</span><span>${s.score}</span></li>`
+              ).join('')
+            : '<li>아직 기록이 없습니다</li>';
+        } catch {
+          list.innerHTML = '<li>불러올 수 없음</li>';
+        }
+      }
+
+      function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+      }
+
+      // 카메라와 MediaPipe 는 시작 화면을 보는 동안 미리 띄운다
+      (async () => {
+        try {
+          await tracker.start(preview);
+          preview.classList.remove('hidden');
+          poseReady = true;
+        } catch (e) {
+          console.warn('포즈 모드 불가 — 키보드로 진행한다', e);
+          showToast('카메라를 쓸 수 없습니다. 화살표 키로 조작하세요');
+        }
+      })();
+
+      el('start-btn').addEventListener('click', () => {
+        nickname = el('nickname').value.trim().slice(0, 12) || '플레이어';
+        phase = 'countdown';
+        countdownEndMs = performance.now() + 5000;
+        show(countdownScreen);
+      });
+
+      el('nickname').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') el('start-btn').click();
+      });
+
+      async function finishGame() {
+        phase = 'gameover';
+        const score = game.getScore();
+        el('final-score').textContent = `${score}점`;
+        el('submit-state').textContent = '점수를 보내는 중…';
+        show(gameoverScreen);
+        try {
+          await submitScore(nickname, score);
+          el('submit-state').textContent = '기록했습니다';
+        } catch {
+          el('submit-state').textContent = '점수를 보내지 못했습니다';
+        }
+        setTimeout(async () => {
+          phase = 'start';
+          keyboard.reset();
+          show(startScreen);
+          await loadRanking();
+        }, 2500);
+      }
+
+      function loop(nowMs) {
+        requestAnimationFrame(loop);
+        let landmarks = null;
+        if (poseReady) {
+          try {
+            landmarks = tracker.read(nowMs);
+          } catch (e) {
+            // GPU 컨텍스트 유실 등으로 detectForVideo 가 죽어도 루프는 계속 돌아야 한다
+            console.warn('포즈 추적이 중단됐다 — 키보드로 전환한다', e);
+            poseReady = false;
+            mode = 'keyboard';
+            showBanner('카메라가 중단됐습니다. 화살표 키로 조작하세요');
+          }
+        }
+
+        if (phase === 'countdown') {
+          const left = Math.max(0, countdownEndMs - nowMs);
+          el('count').textContent = Math.ceil(left / 1000);
+          if (poseReady && landmarks) mapper.addCalibrationSample(landmarks);
+          if (left <= 0) {
+            if (poseReady && mapper.commitCalibration()) {
+              mode = 'pose';
+            } else {
+              // 5초 동안 몸을 한 번도 못 찾았다. 이번 라운드는 포즈 조작이 불가능하다
+              mode = 'keyboard';
+              if (poseReady) showToast('몸을 찾지 못했습니다. 화살표 키로 조작하세요');
+            }
+            phase = 'playing';
+            show(null);
+            game.reset(Math.floor(nowMs) % 100000, nowMs);
+            keyboard.reset();
+          }
+          return;
+        }
+
+        if (phase !== 'playing') return;
+
+        let signal;
+        if (mode === 'pose') {
+          signal = mapper.update(landmarks, nowMs);
+          showBanner(signal.warning);
+        } else {
+          signal = keyboard.read();
+        }
+        panel.update(mapper.getDebug(), signal.lane, mode);
+
+        game.step(signal, nowMs);
+        game.render(window.innerWidth, window.innerHeight);
+
+        if (game.getState() === 'over') {
+          showBanner(null);
+          finishGame();
+        }
+      }
+
+      show(startScreen);
+      loadRanking();
+      requestAnimationFrame(loop);
+    }
+
+    // 부트 분기는 파일 맨 끝이어야 한다. 위로 올리면 boot() 이 아직 초기화되지 않은
+    // const CSRF_TOKEN / API_SCORES 를 읽어 TDZ ReferenceError 가 난다
+    if (new URLSearchParams(location.search).get('test') === '1') {
+      renderSelfTests(runSelfTests());
+    } else {
+      boot();
+    }
+  </script>
+</body>
+</html>
