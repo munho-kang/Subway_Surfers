@@ -1,4 +1,10 @@
 # 랭킹 API와 index 서빙에 대한 테스트. gspread는 모킹한다
+import json
+from unittest.mock import MagicMock, patch
+
+from game import sheets
+
+
 def test_index_returns_html(client):
     response = client.get("/")
     assert response.status_code == 200
@@ -9,12 +15,6 @@ def test_index_embeds_csrf_token(client):
     response = client.get("/")
     assert b'name="csrf-token"' in response.content
     assert b'content=""' not in response.content
-
-
-import json
-from unittest.mock import MagicMock, patch
-
-from game import sheets
 
 
 def _mock_worksheet(records=None):
@@ -69,6 +69,29 @@ def test_post_rejects_non_integer_score(client):
         response = client.post(
             "/api/scores/",
             data=json.dumps({"nickname": "abc", "score": True}),
+            content_type="application/json",
+        )
+    assert response.status_code == 400
+    assert worksheet.append_row.call_count == 0
+
+
+def test_post_rejects_non_object_json_body(client):
+    worksheet = _mock_worksheet()
+    with patch.object(sheets, "_worksheet", return_value=worksheet):
+        # Test with null
+        response = client.post(
+            "/api/scores/",
+            data="null",
+            content_type="application/json",
+        )
+    assert response.status_code == 400
+    assert worksheet.append_row.call_count == 0
+
+    with patch.object(sheets, "_worksheet", return_value=worksheet):
+        # Test with list
+        response = client.post(
+            "/api/scores/",
+            data=json.dumps([1, 2, 3]),
             content_type="application/json",
         )
     assert response.status_code == 400

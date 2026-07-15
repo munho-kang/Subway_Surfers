@@ -35,6 +35,9 @@ def _post_score(request):
     except (ValueError, TypeError):
         return JsonResponse({"error": "잘못된 요청입니다"}, status=400)
 
+    if not isinstance(payload, dict):
+        return JsonResponse({"error": "잘못된 요청입니다"}, status=400)
+
     nickname = str(payload.get("nickname", "")).strip()
     if not 1 <= len(nickname) <= NICKNAME_MAX:
         return JsonResponse(
