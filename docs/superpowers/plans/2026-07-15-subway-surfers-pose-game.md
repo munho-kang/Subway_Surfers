@@ -1299,6 +1299,11 @@ function createKeyboardSource() {
   let slide = false;
 
   window.addEventListener('keydown', (e) => {
+    // 닉네임 입력창에서 스페이스와 화살표를 뺏으면 안 된다.
+    // 이 가드가 없으면 "홍길 동" 이 "홍길동" 이 되고,
+    // 캐럿 옮기려 누른 화살표가 lane 에 눌어붙어 캐릭터가 0번 레인에서 시작한다
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
     if (e.repeat) return;
     if (e.key === 'ArrowLeft') lane = Math.max(0, lane - 1);
     else if (e.key === 'ArrowRight') lane = Math.min(2, lane + 1);
@@ -1801,7 +1806,8 @@ function boot() {
   const tracker = createPoseTracker();
   const panel = mountDebugPanel(mapper);
 
-  let mode = 'keyboard';
+  let poseReady = false;   // 세션 동안 카메라 파이프라인이 살아있는지. mode 는 라운드마다 결정된다
+  let mode = 'keyboard';   // 이번 라운드의 조작 모드
   let phase = 'start';
   let countdownEndMs = 0;
   let nickname = '플레이어';
@@ -1849,7 +1855,7 @@ function boot() {
     try {
       await tracker.start(preview);
       preview.classList.remove('hidden');
-      mode = 'pose';
+      poseReady = true;
     } catch (e) {
       console.warn('포즈 모드 불가 — 키보드로 진행한다', e);
       showToast('카메라를 쓸 수 없습니다. 화살표 키로 조작하세요');
@@ -1889,21 +1895,26 @@ function boot() {
 
   function loop(nowMs) {
     requestAnimationFrame(loop);
-    const landmarks = mode === 'pose' ? tracker.read(nowMs) : null;
+    const landmarks = poseReady ? tracker.read(nowMs) : null;
 
     if (phase === 'countdown') {
       const left = Math.max(0, countdownEndMs - nowMs);
       el('count').textContent = Math.ceil(left / 1000);
-      if (mode === 'pose' && landmarks) mapper.addCalibrationSample(landmarks);
+      if (poseReady && landmarks) mapper.addCalibrationSample(landmarks);
       if (left <= 0) {
-        if (mode === 'pose' && !mapper.commitCalibration()) {
-          // 5초 동안 몸을 한 번도 못 찾았다. 포즈 조작이 불가능하다
+        // 라운드마다 다시 시도한다. mode 를 세션 플래그로 쓰면 1라운드에 자세 잡는 게
+        // 늦었다는 이유만으로 그 페이지 내내 포즈 조작이 잠겨버린다
+        if (poseReady && mapper.commitCalibration()) {
+          mode = 'pose';
+        } else {
           mode = 'keyboard';
-          showToast('몸을 찾지 못했습니다. 화살표 키로 조작하세요');
+          // 카메라가 아예 없는 사람에게는 부팅 때 이미 알렸다. 매 라운드 잔소리하지 않는다
+          if (poseReady) showToast('몸을 찾지 못했습니다. 화살표 키로 조작하세요');
         }
         phase = 'playing';
         show(null);
         game.reset(Math.floor(nowMs) % 100000, nowMs);
+        keyboard.reset();   // 시작 화면에서 눌린 화살표가 새어들어오지 않게 한다
       }
       return;
     }
