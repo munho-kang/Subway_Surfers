@@ -124,6 +124,10 @@
       // 지나가면 억울하게 죽는다. 레인이 laneOut/laneIn 을 쓰는 것과 같은 이유다
       slideRelease: 0.7,      // slideThreshold 대비 비율
       baselineAlpha: 0.02,    // 기준선 추종 EMA
+      // 판정도 아닌데 조용함 대역 밖 이탈이 이만큼 지속되면 기준선이 틀린 것으로 본다.
+      // 점프의 상승 구간도 잠깐은 대역 밖인데 아직 판정 전이라 잠금이 없다.
+      // 짧으면 뜨는 도중에 기준선이 머리를 따라가 점프가 죽으므로 넉넉히 둔다
+      baselineResetMs: 1500,
       laneAlpha: 0.3,         // 레인 x EMA
       animMs: 600,            // Game의 JUMP_MS와 값을 맞춰야 한다 (아래 "── Game" 섹션)
       refractoryMs: 300,
@@ -159,6 +163,7 @@
       let jumpWasOver = false;
       let sliding = false;          // 엣지가 아니라 유지되는 자세다
       let lastSignal = { lane: 1, jump: false, slide: false, warning: null };
+      let excursionSinceMs = null;  // 현재 이탈이 시작된 시각. 기준선이 틀렸는지 재는 데 쓴다
       let peakHeadRise = 0;         // 봉우리는 2~3 프레임이라 실시간으로는 못 읽는다. 붙들어서 실측에 쓴다
       let debug = { headRise: 0, peakHeadRise: 0, laneX: 0.5 };
 
@@ -177,6 +182,7 @@
         };
         peakHeadRise = 0;   // 기준선이 바뀌면 이전 봉우리는 의미가 없다
         debug.peakHeadRise = 0;   // debug 는 update() 가 다시 돌기 전까지 남는 스냅샷이라 직접 갱신한다
+        excursionSinceMs = null;  // 새 기준선에 대한 이탈은 아직 없다
         calibSamples = [];
         return true;
       }
@@ -185,6 +191,9 @@
       // 한 프레임 놓쳤다고 자세를 풀면 마침 가로보가 지나갈 때 억울하게 죽는다.
       // jump 만 false 인 것은 엣지라서다. 다시 뜰 때 새 엣지로 발화한다
       function hold(warning) {
+        // 이탈이 지속됐다는 주장은 실제로 본 프레임에서만 할 수 있다.
+        // 안 보이는 동안 흐른 시간을 세면 돌아오자마자 기준선을 스냅해버린다
+        excursionSinceMs = null;
         lastSignal = { lane: lastSignal.lane, jump: false, slide: sliding, warning };
         return lastSignal;
       }
@@ -236,11 +245,29 @@
         jumpWasOver = jumpOver;
         if (headRise > peakHeadRise) peakHeadRise = headRise;
 
+        // 판정 중 — 이때의 눈 y 는 조작 신호이지 기준이 아니다
+        const judging = locked || jump || slide;
+
         // 기준선 추종 — 판정 중에는 절대 갱신하지 않는다.
         // 이 가드가 없으면 슬라이드 자세가 기준선으로 굳어 슬라이드가 영영 안 먹는다
         const quiet = Math.abs(headRise) < Math.min(cfg.jumpThreshold, cfg.slideThreshold) / 2;
-        if (quiet && !locked && !jump && !slide) {
+        if (quiet && !judging) {
           baseline.eyeY += cfg.baselineAlpha * (m.eye.y - baseline.eyeY);
+        }
+
+        // 기준선 오류 복구 — 판정도 아닌데 대역 밖 이탈이 오래 지속되면 남는 해석이
+        // 없다. 점프는 탄도라 이만큼 못 버티고 슬라이드는 자기 임계로 이미 걸러진다.
+        // 그러니 이건 기준선이 틀린 것이고, 현재 눈 y 로 스냅해 바로잡는다.
+        // 이 복구가 없으면 오차가 대역보다 커진 순간 그 오차를 지울 유일한 수단인
+        // 추종이 바로 그 오차 때문에 꺼져 스스로 빠져나올 수 없다
+        if (quiet || judging) {
+          excursionSinceMs = null;
+        } else if (excursionSinceMs === null) {
+          excursionSinceMs = nowMs;
+        } else if (nowMs - excursionSinceMs >= cfg.baselineResetMs) {
+          baseline.eyeY = m.eye.y;
+          excursionSinceMs = null;
+          peakHeadRise = 0;   // 기준선이 바뀌면 이전 봉우리는 의미가 없다
         }
 
         // 기준선과 몸통 길이는 프리뷰 오버레이가 임계선을 그리는 데 쓴다.
@@ -445,6 +472,78 @@
         m.commitCalibration();
         const reset = m.getDebug().peakHeadRise;
         assert(reset === 0, `캘리브레이션 후 봉우리 ${reset} (기대 0)`);
+      });
+
+      // 약 3초. 복구 시간 1500ms 에 점프 잠금 900ms 가 앞설 수 있어 넉넉히 준다
+      const still = () => Array.from({ length: 90 }, stand);
+
+      check('기준선이 점프 임계를 넘게 틀어져도 스스로 회복한다', () => {
+        // 굽힌 채(눈 0.16) 기준을 잡고 똑바로 서면(눈 0.10) 오차가 0.24 몸통이다.
+        // 임계 0.2 를 넘으므로 jumpOver 가 영구 참이 되어 새 엣지가 안 생기고,
+        // 조용함 대역(0.1) 밖이라 그 오차를 지울 기준선 추종마저 꺼진다
+        const m = calibrated(() => makePose({ eyeY: 0.16 }));
+        feed(m, still());
+        const residual = m.getDebug().headRise;
+        assert(Math.abs(residual) < 1e-6, `3초를 서 있었는데 잔차 ${residual} (기대 0)`);
+
+        const after = feed(m, [stand(), makePose({ eyeY: 0.03 }), stand()], 5000);
+        assert(after.jumps === 1, `회복 후 jump ${after.jumps}회 발화 (기대 1)`);
+      });
+
+      check('기준선이 반대로 틀어져도 스스로 회복한다', () => {
+        // 까치발(눈 0.06)로 기준을 잡고 평소대로 서면 오차가 -0.16 몸통이다.
+        // 래치는 안 생기지만 점프가 그만큼 손해를 봐 임계를 못 넘는다 — 증상이 같다
+        const m = calibrated(() => makePose({ eyeY: 0.06 }));
+        feed(m, still());
+        const residual = m.getDebug().headRise;
+        assert(Math.abs(residual) < 1e-6, `3초를 서 있었는데 잔차 ${residual} (기대 0)`);
+
+        const after = feed(m, [stand(), makePose({ eyeY: 0.03 }), stand()], 5000);
+        assert(after.jumps === 1, `회복 후 jump ${after.jumps}회 발화 (기대 1)`);
+      });
+
+      check('슬라이드를 오래 유지해도 기준선이 그 자세로 굳지 않는다', () => {
+        // 복구가 슬라이드를 기준선 오류로 오해하면 슬라이드 자세가 기준선이 되어
+        // 슬라이드가 영영 안 먹는다. 판정 중에는 기준선을 건드리지 않아야 한다
+        const m = calibrated();
+        const r = feed(m, Array.from({ length: 150 }, () => makePose({ eyeY: 0.26 })));
+        const held = r.slideAt.filter(Boolean).length;
+        assert(held === 150, `5초 유지 중 ${held} 프레임만 슬라이드였다 (기대 150)`);
+
+        // 굳었다면 일어서는 순간 머리가 기준선보다 0.64 몸통 위가 되어 헛점프가 난다
+        const up = feed(m, [stand(), stand()], 6000);
+        assert(up.jumps === 0, `일어섰더니 jump ${up.jumps}회 — 기준선이 슬라이드 자세로 굳었다`);
+      });
+
+      check('천천히 떠오르는 점프도 정상 발화한다', () => {
+        // 상승 구간은 조용함 대역(0.1) 밖이지만 아직 임계(0.2) 아래라 판정 전이고,
+        // 그래서 잠금도 없어 복구 타이머가 돈다. 복구 시간이 짧으면 뜨는 도중에
+        // 기준선이 머리를 따라가 점프가 영영 임계를 못 넘는다
+        const m = calibrated();
+        const r = feed(m, [
+          stand(),
+          makePose({ eyeY: 0.074 }),   // 0.104 몸통 — 대역 밖으로 나간다
+          makePose({ eyeY: 0.070 }),   // 0.120
+          makePose({ eyeY: 0.066 }),   // 0.136
+          makePose({ eyeY: 0.062 }),   // 0.152
+          makePose({ eyeY: 0.058 }),   // 0.168 — 여기까지 165ms 를 대역 밖에 머문다
+          makePose({ eyeY: 0.045 }),   // 0.220 — 여기서 발화해야 한다
+          stand(),
+        ]);
+        assert(r.jumps === 1, `jump ${r.jumps}회 발화 (기대 1)`);
+      });
+
+      check('점프를 반복해도 기준선이 머리를 쫓아 올라가지 않는다', () => {
+        // 조용함 대역이 있는 이유다. 없으면 점프할 때마다 기준선이 조금씩 따라
+        // 올라가 점프가 점점 안 걸린다 — 예전에 실제로 났던 버그다
+        const m = calibrated();
+        let jumps = 0;
+        for (let i = 0; i < 20; i++) {
+          // 한 번에 30 프레임(990ms). 잠금 900ms 가 풀린 뒤 다음 점프가 온다
+          const r = feed(m, [makePose({ eyeY: 0.03 }), ...Array.from({ length: 29 }, stand)], i * 30 * 33);
+          jumps += r.jumps;
+        }
+        assert(jumps === 20, `점프 20회 중 ${jumps}회만 발화 — 기준선이 밀렸다`);
       });
 
       return results;
