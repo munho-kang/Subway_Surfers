@@ -327,13 +327,290 @@
           <ul style="list-style:none;padding:0">${rows}</ul>
         </div>`;
     }
-    // ── Game                             (Task 4)
-    // ── 키보드 소스                      (Task 4)
+    // ── Game — 조작 신호만 받아 상태를 굴리고 그린다. 포즈의 존재를 모른다
+    const Z_SPAWN = 100;          // 소실점 z
+    const Z_CHAR = 3;             // 캐릭터 z
+    const Z_DESPAWN = -5;
+    const PERSPECTIVE_K = 0.06;   // 원근 강도
+    const BASE_SPEED = 18;        // z/초
+    const SPEED_GROWTH = 0.35;    // 초당 증가
+    const MAX_SPEED = 55;
+    const BASE_GAP = 22;          // BASE_SPEED 기준 스폰 간격
+    const LANE_SPREAD = 0.26;     // 화면폭 대비 레인 간격
+    const JUMP_MS = 600;
+    const SLIDE_MS = 600;
+    const COIN_VALUE = 10;
+    const HORIZON_RATIO = 0.35;
+
+    // z가 클수록 멀고 작다. z=0 에서 scale=1
+    function project(z, height) {
+      const scale = 1 / (1 + z * PERSPECTIVE_K);
+      const horizonY = height * HORIZON_RATIO;
+      return { y: horizonY + (height - horizonY) * scale, scale, horizonY };
+    }
+
+    function laneScreenX(laneFloat, scale, width) {
+      return width / 2 + (laneFloat - 1) * LANE_SPREAD * width * scale;
+    }
+
+    // 결정적 난수. 시드를 고정하면 같은 코스가 재현된다
+    function mulberry32(seed) {
+      let a = seed;
+      return function () {
+        a |= 0;
+        a = (a + 0x6d2b79f5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    function clears(kind, isJumping, isSliding) {
+      if (kind === 'barricade') return isJumping;
+      if (kind === 'beam') return isSliding;
+      return false;   // pillar — 레인을 바꾸는 수밖에 없다
+    }
+
+    // 게임은 항상 클리어 가능해야 한다.
+    // 기둥을 최대 2개로 제한하면 최소 한 레인은 기둥이 아니게 되고,
+    // 기둥 아닌 레인은 빈 레인이거나 점프/슬라이드로 통과 가능하다
+    function spawnGroup(rng, atZ) {
+      const kinds = [null, null, null];
+      const pillarCount = Math.floor(rng() * 3);   // 0, 1, 2
+      const lanes = [0, 1, 2];
+      for (let i = lanes.length - 1; i > 0; i--) {
+        const j = Math.floor(rng() * (i + 1));
+        [lanes[i], lanes[j]] = [lanes[j], lanes[i]];
+      }
+      for (let i = 0; i < pillarCount; i++) kinds[lanes[i]] = 'pillar';
+
+      for (let l = 0; l < 3; l++) {
+        if (kinds[l]) continue;
+        const r = rng();
+        if (r < 0.25) kinds[l] = 'barricade';
+        else if (r < 0.45) kinds[l] = 'beam';
+      }
+
+      const objects = [];
+      for (let l = 0; l < 3; l++) {
+        if (kinds[l]) objects.push({ kind: kinds[l], lane: l, z: atZ, dead: false });
+      }
+
+      // 코인은 완전히 빈 레인에만 둔다. 플레이어를 함정으로 유인하지 않는다
+      const emptyLanes = [0, 1, 2].filter((l) => !kinds[l]);
+      if (emptyLanes.length > 0 && rng() < 0.6) {
+        const l = emptyLanes[Math.floor(rng() * emptyLanes.length)];
+        objects.push({ kind: 'coin', lane: l, z: atZ, dead: false });
+      }
+      return objects;
+    }
+
+    function createGame(canvas) {
+      const ctx = canvas.getContext('2d');
+      let state = 'idle';
+      let lane = 1;
+      let laneVisual = 1;
+      let jumpEndMs = 0;
+      let slideEndMs = 0;
+      let speed = BASE_SPEED;
+      let distance = 0;
+      let coins = 0;
+      let elapsed = 0;
+      let objects = [];
+      let zSinceSpawn = 0;
+      let lastMs = 0;
+      let rng = mulberry32(1);
+      let nowMs = 0;
+
+      function reset(seed = 1, startMs = 0) {
+        state = 'playing';
+        lane = 1; laneVisual = 1;
+        jumpEndMs = 0; slideEndMs = 0;
+        speed = BASE_SPEED; distance = 0; coins = 0; elapsed = 0;
+        objects = []; zSinceSpawn = 0;
+        lastMs = startMs; nowMs = startMs;
+        rng = mulberry32(seed);
+      }
+
+      function step(signal, atMs) {
+        if (state !== 'playing') return;
+        nowMs = atMs;
+        // 탭 전환 후 델타가 폭발해 장애물을 관통하는 것을 막는다
+        const dt = Math.min((atMs - lastMs) / 1000, 0.05);
+        lastMs = atMs;
+        if (dt <= 0) return;
+
+        elapsed += dt;
+        speed = Math.min(BASE_SPEED + SPEED_GROWTH * elapsed, MAX_SPEED);
+        distance += speed * dt;
+
+        lane = signal.lane;
+        const busy = atMs < jumpEndMs || atMs < slideEndMs;
+        if (signal.jump && !busy) jumpEndMs = atMs + JUMP_MS;
+        else if (signal.slide && !busy) slideEndMs = atMs + SLIDE_MS;
+        const isJumping = atMs < jumpEndMs;
+        const isSliding = atMs < slideEndMs;
+
+        laneVisual += (lane - laneVisual) * Math.min(1, dt * 12);
+
+        // 속도가 오르면 간격도 벌려 반응 시간을 일정하게 유지한다
+        zSinceSpawn += speed * dt;
+        if (zSinceSpawn >= BASE_GAP * (speed / BASE_SPEED)) {
+          objects.push(...spawnGroup(rng, Z_SPAWN));
+          zSinceSpawn = 0;
+        }
+
+        for (const o of objects) {
+          const prevZ = o.z;
+          o.z -= speed * dt;
+          // 교차 판정이라 속도가 아무리 올라도 관통하지 않는다
+          if (prevZ > Z_CHAR && o.z <= Z_CHAR && o.lane === lane) {
+            if (o.kind === 'coin') {
+              coins += 1;
+              o.dead = true;
+            } else if (!clears(o.kind, isJumping, isSliding)) {
+              state = 'over';
+              return;
+            }
+          }
+        }
+        objects = objects.filter((o) => !o.dead && o.z > Z_DESPAWN);
+      }
+
+      function drawObject(o, W, H) {
+        const p = project(o.z, H);
+        if (p.scale <= 0.02) return;
+        const x = laneScreenX(o.lane, p.scale, W);
+        const w = LANE_SPREAD * W * p.scale * 0.7;
+        if (o.kind === 'coin') {
+          ctx.fillStyle = '#ffd34d';
+          ctx.beginPath();
+          ctx.arc(x, p.y - 60 * p.scale, 14 * p.scale, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (o.kind === 'barricade') {
+          ctx.fillStyle = '#e5533d';
+          ctx.fillRect(x - w / 2, p.y - 30 * p.scale, w, 30 * p.scale);
+        } else if (o.kind === 'beam') {
+          ctx.fillStyle = '#4da3ff';
+          ctx.fillRect(x - w / 2, p.y - 150 * p.scale, w, 30 * p.scale);
+        } else {
+          ctx.fillStyle = '#9b6dff';
+          ctx.fillRect(x - w / 4, p.y - 160 * p.scale, w / 2, 160 * p.scale);
+        }
+      }
+
+      function drawCharacter(W, H) {
+        const p = project(Z_CHAR, H);
+        const x = laneScreenX(laneVisual, p.scale, W);
+        let hop = 0;
+        if (nowMs < jumpEndMs) {
+          const t = 1 - (jumpEndMs - nowMs) / JUMP_MS;   // 0 → 1
+          hop = Math.sin(t * Math.PI) * 90;
+        }
+        const h = nowMs < slideEndMs ? 30 : 70;
+        ctx.fillStyle = '#7ef6a0';
+        ctx.fillRect(
+          x - 16 * p.scale,
+          p.y - (h + hop) * p.scale,
+          32 * p.scale,
+          h * p.scale
+        );
+      }
+
+      function render() {
+        const W = canvas.width;
+        const H = canvas.height;
+        ctx.fillStyle = '#111a33';
+        ctx.fillRect(0, 0, W, H * HORIZON_RATIO);
+        ctx.fillStyle = '#1b2a4a';
+        ctx.fillRect(0, H * HORIZON_RATIO, W, H * (1 - HORIZON_RATIO));
+
+        const near = project(0, H);
+        const far = project(Z_SPAWN, H);
+        ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+        ctx.lineWidth = 2;
+        for (const edge of [-0.5, 0.5, 1.5, 2.5]) {
+          ctx.beginPath();
+          ctx.moveTo(laneScreenX(edge, near.scale, W), near.y);
+          ctx.lineTo(laneScreenX(edge, far.scale, W), far.y);
+          ctx.stroke();
+        }
+
+        for (const o of [...objects].sort((a, b) => b.z - a.z)) drawObject(o, W, H);
+        drawCharacter(W, H);
+
+        ctx.fillStyle = '#e8ecf5';
+        ctx.font = '600 24px system-ui';
+        ctx.textAlign = 'left';
+        ctx.fillText(`${getScore()}점`, 24, 44);
+        ctx.font = '400 15px system-ui';
+        ctx.fillStyle = 'rgba(232,236,245,0.65)';
+        ctx.fillText(`코인 ${coins}   속도 ${speed.toFixed(0)}`, 24, 70);
+      }
+
+      const getScore = () => Math.floor(distance) + coins * COIN_VALUE;
+
+      return { reset, step, render, getState: () => state, getScore };
+    }
+
+    // ── 키보드 소스 — 개발 편의가 아니라 필수 인프라다.
+    // 게임 로직을 고칠 때마다 2m 뒤로 물러나 뛸 수는 없다.
+    // InputMapper 와 동일하게 jump/slide 는 한 프레임짜리 엣지다
+    function createKeyboardSource() {
+      let lane = 1;
+      let jump = false;
+      let slide = false;
+
+      window.addEventListener('keydown', (e) => {
+        if (e.repeat) return;
+        if (e.key === 'ArrowLeft') lane = Math.max(0, lane - 1);
+        else if (e.key === 'ArrowRight') lane = Math.min(2, lane + 1);
+        else if (e.key === 'ArrowUp' || e.key === ' ') jump = true;
+        else if (e.key === 'ArrowDown') slide = true;
+        else return;
+        e.preventDefault();
+      });
+
+      return {
+        read() {
+          const signal = { lane, jump, slide, warning: null };
+          jump = false;
+          slide = false;
+          return signal;
+        },
+        reset() { lane = 1; jump = false; slide = false; },
+      };
+    }
     // ── PoseTracker                      (Task 5)
     // ── 디버그 패널                      (Task 5)
     // ── 화면 전환·API·부트               (Task 6)
+    const canvas = document.getElementById('canvas');
+
+    function resizeCanvas() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.floor(window.innerWidth * dpr);
+      canvas.height = Math.floor(window.innerHeight * dpr);
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
     if (new URLSearchParams(location.search).get('test') === '1') {
       renderSelfTests(runSelfTests());
+    } else {
+      // 임시 부트 — Task 6 이 시작 화면으로 교체한다
+      const game = createGame(canvas);
+      const keyboard = createKeyboardSource();
+      game.reset(1, performance.now());
+      (function loop(nowMs) {
+        requestAnimationFrame(loop);
+        if (game.getState() === 'over') {
+          keyboard.reset();
+          game.reset(Math.floor(nowMs) % 100000, nowMs);
+          return;
+        }
+        game.step(keyboard.read(), nowMs);
+        game.render();
+      })(performance.now());
     }
   </script>
 </body>
