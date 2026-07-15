@@ -109,6 +109,8 @@ hline(d.baselineEyeY + cfg.slideThreshold * cfg.slideRelease * d.torsoLen, ...) 
 **측정 절차.** 캘리브레이션 → 두 발로 몇 번 점프 → `점프 봉우리` 읽기 → 그 값의 75~80%
 를 임계로 확정.
 
+peak-hold 도 셀프 테스트를 하나 갖는다 — 최댓값을 유지하는가, 캘리브레이션에서 리셋되는가.
+
 ### 6. 임계는 잠정값이다
 
 `jumpThreshold: 0.08` 로 두고 **미검증** 임을 주석에 명시한다. 근거는 추정뿐이다 — 발목
@@ -141,7 +143,8 @@ hline(d.baselineEyeY + cfg.slideThreshold * cfg.slideRelease * d.torsoLen, ...) 
 판정이 읽는 값은 `eye.y` 와 `torsoLen` 둘뿐이고 `torsoLen` 은 불변이라 온몸이 뜬 경우와
 같은 값이 나온다. 합성 포즈로서 유효하다.
 
-성공 기준은 `?test=1` 에서 **8/8 통과** 다 (기존 10 개에서 2 개 삭제).
+기존 10 개에서 2 개를 삭제해 8 개, 여기에 봉우리 테스트 1 개를 더해 최종 9 개다.
+성공 기준은 `?test=1` 에서 **9/9 통과** 다.
 
 ## 위험
 
