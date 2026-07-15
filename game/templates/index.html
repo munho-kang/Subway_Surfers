@@ -119,10 +119,14 @@
 
     const DEFAULT_CFG = {
       jumpThreshold: 0.1,     // 몸통 길이 대비. 실측 점프 봉우리 0.13 의 약 77%
-      slideThreshold: 0.5,    // 몸통 길이 대비
+      slideThreshold: 0.5,    // 몸통 길이 대비. 이만큼 숙이면 슬라이드가 걸린다
+      // 슬라이드를 푸는 문턱. 거는 문턱보다 낮게 둬 경계에서 떠는 것을 막는다.
+      // 이 히스테리시스가 없으면 문턱 근처에서 한 프레임 떨어질 때 마침 가로보가
+      // 지나가면 억울하게 죽는다. 레인이 laneOut/laneIn 을 쓰는 것과 같은 이유다
+      slideRelease: 0.7,      // slideThreshold 대비 비율
       baselineAlpha: 0.02,    // 기준선 추종 EMA
       laneAlpha: 0.3,         // 레인 x EMA
-      animMs: 600,            // Game의 JUMP_MS/SLIDE_MS와 값을 맞춰야 한다 (아래 "── Game" 섹션)
+      animMs: 600,            // Game의 JUMP_MS와 값을 맞춰야 한다 (아래 "── Game" 섹션)
       refractoryMs: 300,
       visibilityMin: 0.5,
       laneOutLeft: 0.30,      // 가운데 → 왼쪽
@@ -157,7 +161,7 @@
       let lane = 1;
       let lockUntilMs = 0;
       let jumpWasOver = false;
-      let slideWasOver = false;
+      let sliding = false;          // 엣지가 아니라 유지되는 자세다
       let lastSignal = { lane: 1, jump: false, slide: false, warning: null };
       let debug = { jumpAmount: 0, slideAmount: 0, laneX: 0.5, ankleVisibility: 1 };
 
@@ -179,8 +183,11 @@
         return true;
       }
 
+      // 포즈가 끊긴 동안에는 마지막 자세를 붙든다. 레인과 같은 이유다 —
+      // 한 프레임 놓쳤다고 자세를 풀면 마침 가로보가 지나갈 때 억울하게 죽는다.
+      // jump 만 false 인 것은 엣지라서다. 다시 뜰 때 새 엣지로 발화한다
       function hold(warning) {
-        lastSignal = { lane: lastSignal.lane, jump: false, slide: false, warning };
+        lastSignal = { lane: lastSignal.lane, jump: false, slide: sliding, warning };
         return lastSignal;
       }
 
@@ -213,23 +220,23 @@
         const ankleVisibility = m.ankle.visibility;
         const ankleOk = ankleVisibility >= cfg.visibilityMin;
 
-        // 상승 엣지에서만 발화한다. 발화 후 애니메이션+불응기 동안 잠근다
+        // 슬라이드는 자세다 — 숙이고 있는 동안 유지되고 몸을 세우면 풀린다.
+        // 걸 때는 slideThreshold, 풀 때는 그보다 낮은 문턱을 쓴다
+        sliding = sliding
+          ? slideAmount > cfg.slideThreshold * cfg.slideRelease
+          : slideAmount > cfg.slideThreshold;
+        const slide = sliding;
+
+        // 점프는 탄도다 — 뜬 순간이 전부이므로 상승 엣지에서 한 번만 발화하고
+        // 애니메이션+불응기 동안 잠근다. 숙인 채로는 뛸 수 없다
         const locked = nowMs < lockUntilMs;
         const jumpOver = ankleOk && jumpAmount > cfg.jumpThreshold;
-        const slideOver = slideAmount > cfg.slideThreshold;
         let jump = false;
-        let slide = false;
-        if (!locked) {
-          if (jumpOver && !jumpWasOver) {
-            jump = true;
-            lockUntilMs = nowMs + cfg.animMs + cfg.refractoryMs;
-          } else if (slideOver && !slideWasOver) {
-            slide = true;
-            lockUntilMs = nowMs + cfg.animMs + cfg.refractoryMs;
-          }
+        if (!locked && !sliding && jumpOver && !jumpWasOver) {
+          jump = true;
+          lockUntilMs = nowMs + cfg.animMs + cfg.refractoryMs;
         }
         jumpWasOver = jumpOver;
-        slideWasOver = slideOver;
 
         // 기준선 추종 — 판정 중에는 절대 갱신하지 않는다.
         // 이 가드가 없으면 슬라이드 자세가 기준선으로 굳어 슬라이드가 영영 안 먹는다
@@ -298,22 +305,24 @@
         catch (e) { results.push({ name, ok: false, msg: e.message }); }
       }
 
-      // 프레임 시퀀스를 흘려보내고 발화 횟수를 센다
+      // 프레임 시퀀스를 흘려보낸다. jump 는 엣지라 횟수를, slide 는 유지 상태라
+      // 프레임별 값을 본다 — 횟수로 세면 "얼마나 오래 유지됐나" 를 검증할 수 없다
       function feed(mapper, poses, startMs = 0, stepMs = 33) {
-        let jumps = 0, slides = 0, lane = 1;
+        let jumps = 0, lane = 1;
+        const slideAt = [];
         poses.forEach((p, i) => {
           const s = mapper.update(p, startMs + i * stepMs);
           if (s.jump) jumps++;
-          if (s.slide) slides++;
+          slideAt.push(s.slide);
           lane = s.lane;
         });
-        return { jumps, slides, lane };
+        return { jumps, slideAt, lane };
       }
 
-      // 셀프 테스트는 InputMapper 의 로직(엣지·불응기·스케일 무관성)을 검증한다.
+      // 셀프 테스트는 InputMapper 의 로직(엣지·유지·불응기·스케일 무관성)을 검증한다.
       // 합성 포즈 값은 임계와의 관계로 의미가 정해지므로, 실측 튜닝이 DEFAULT_CFG 를
       // 바꿔도 그 관계가 흔들리지 않도록 임계를 못박는다
-      const TEST_CFG = { jumpThreshold: 0.2, slideThreshold: 0.5 };
+      const TEST_CFG = { jumpThreshold: 0.2, slideThreshold: 0.5, slideRelease: 0.7 };
 
       function calibrated(makeStand = () => makePose(), overrides) {
         const m = createInputMapper({ ...TEST_CFG, ...overrides });
@@ -338,19 +347,72 @@
         assert(r.jumps === 1, `jump ${r.jumps}회 발화 (기대 1)`);
       });
 
-      check('슬라이드 시퀀스에서 slide가 정확히 1회 발화한다', () => {
-        // 눈 0.10 → 0.26 은 0.16/0.25 = 0.64 몸통. 임계 0.5 를 넘는다
+      // 기대 프레임열과 실제를 비교한다. 유지 상태는 "언제 켜지고 언제 꺼지나" 가 전부다
+      const sameFrames = (got, want) =>
+        got.length === want.length && got.every((v, i) => v === want[i]);
+      const showFrames = (a) => a.map((v) => (v ? 'O' : '.')).join('');
+
+      check('슬라이드는 숙이고 있는 동안 유지되고 몸을 세우면 풀린다', () => {
+        // 눈 기준선 0.10, 몸통 0.25. 임계 0.5 → 0.125 아래로 숙이면 걸린다
         const m = calibrated();
-        const seq = [
+        const r = feed(m, [
           stand(),
-          makePose({ eyeY: 0.20 }),   // 0.40 몸통 — 아직 아니다
-          makePose({ eyeY: 0.26 }),   // 0.64 몸통 — 여기서 발화
-          makePose({ eyeY: 0.22 }),
-          stand(), stand(),
-        ];
-        const r = feed(m, seq);
-        assert(r.slides === 1, `slide ${r.slides}회 발화 (기대 1)`);
+          makePose({ eyeY: 0.20 }),   // 0.40 몸통 — 아직 안 걸린다
+          makePose({ eyeY: 0.26 }),   // 0.64 몸통 — 여기서 걸린다
+          makePose({ eyeY: 0.30 }),   // 0.80 몸통 — 계속 숙이고 있다
+          makePose({ eyeY: 0.26 }),   // 0.64 몸통 — 여전히 유지
+          stand(),                    // 몸을 세웠다 — 여기서 풀린다
+          stand(),
+        ]);
+        const want = [false, false, true, true, true, false, false];
+        assert(sameFrames(r.slideAt, want),
+          `프레임열 ${showFrames(r.slideAt)} (기대 ${showFrames(want)})`);
         assert(r.jumps === 0, `슬라이드인데 jump가 ${r.jumps}회 발화했다`);
+      });
+
+      check('걸린 뒤에는 거는 문턱 아래로 올라와도 푸는 문턱까지는 유지된다', () => {
+        // 거는 문턱 0.5, 푸는 문턱 0.5 x 0.7 = 0.35 몸통.
+        // 이 히스테리시스가 없으면 문턱 근처에서 떨 때 슬라이드가 깜빡인다
+        const m = calibrated();
+        const r = feed(m, [
+          stand(),
+          makePose({ eyeY: 0.26 }),   // 0.64 — 걸린다
+          makePose({ eyeY: 0.22 }),   // 0.48 — 거는 문턱 아래지만 푸는 문턱 위 → 유지
+          makePose({ eyeY: 0.18 }),   // 0.32 — 푸는 문턱 아래 → 풀린다
+        ]);
+        const want = [false, true, true, false];
+        assert(sameFrames(r.slideAt, want),
+          `프레임열 ${showFrames(r.slideAt)} (기대 ${showFrames(want)})`);
+      });
+
+      check('포즈를 놓친 프레임에도 슬라이드 자세는 유지된다', () => {
+        // 한 프레임 놓쳤다고 자세를 풀면 마침 가로보가 지나갈 때 억울하게 죽는다
+        const m = calibrated();
+        const r = feed(m, [
+          stand(),
+          makePose({ eyeY: 0.26 }),   // 걸린다
+          null,                       // 포즈 유실 — 붙들어야 한다
+          null,
+          makePose({ eyeY: 0.26 }),   // 다시 보인다
+          stand(),                    // 세웠다 — 풀린다
+        ]);
+        const want = [false, true, true, true, true, false];
+        assert(sameFrames(r.slideAt, want),
+          `프레임열 ${showFrames(r.slideAt)} (기대 ${showFrames(want)})`);
+      });
+
+      check('숙이고 있는 동안에는 점프가 발화하지 않는다', () => {
+        // 숙인 채로 뛸 수는 없다. 뛰려면 먼저 몸을 세워야 한다
+        const m = calibrated();
+        const r = feed(m, [
+          stand(),
+          makePose({ eyeY: 0.26 }),                  // 슬라이드가 걸린다
+          makePose({ eyeY: 0.26, ankleY: 0.83 }),    // 숙인 채 발목이 떠도 무시된다
+          makePose({ eyeY: 0.26, ankleY: 0.90 }),
+          stand(),                                   // 세웠다
+          makePose({ ankleY: 0.83 }),                // 이제는 뛴다
+        ]);
+        assert(r.jumps === 1, `jump ${r.jumps}회 발화 (기대 1 — 세운 뒤 한 번만)`);
       });
 
       check('불응기 안의 두 번째 점프는 무시된다', () => {
@@ -436,7 +498,6 @@
     const LANE_SPREAD = 0.26;     // 화면폭 대비 레인 간격
     // InputMapper의 DEFAULT_CFG.animMs와 값을 맞춰야 한다 (위 "── InputMapper" 섹션)
     const JUMP_MS = 600;
-    const SLIDE_MS = 600;
     const COIN_VALUE = 10;
     const HORIZON_RATIO = 0.35;
 
@@ -509,7 +570,7 @@
       let lane = 1;
       let laneVisual = 1;
       let jumpEndMs = 0;
-      let slideEndMs = 0;
+      let sliding = false;
       let speed = BASE_SPEED;
       let distance = 0;
       let coins = 0;
@@ -523,7 +584,7 @@
       function reset(seed = 1, startMs = 0) {
         state = 'playing';
         lane = 1; laneVisual = 1;
-        jumpEndMs = 0; slideEndMs = 0;
+        jumpEndMs = 0; sliding = false;
         speed = BASE_SPEED; distance = 0; coins = 0; elapsed = 0;
         objects = []; zSinceSpawn = 0;
         lastMs = startMs; nowMs = startMs;
@@ -543,11 +604,12 @@
         distance += speed * dt;
 
         lane = signal.lane;
-        const busy = atMs < jumpEndMs || atMs < slideEndMs;
-        if (signal.jump && !busy) jumpEndMs = atMs + JUMP_MS;
-        else if (signal.slide && !busy) slideEndMs = atMs + SLIDE_MS;
+        // 점프는 탄도라 한 번 뜨면 JUMP_MS 동안 내려올 수 없다.
+        // 슬라이드는 자세라 신호가 들어와 있는 동안만 유지된다 — 타이머가 없다
+        if (signal.jump && atMs >= jumpEndMs && !signal.slide) jumpEndMs = atMs + JUMP_MS;
         const isJumping = atMs < jumpEndMs;
-        const isSliding = atMs < slideEndMs;
+        const isSliding = signal.slide && !isJumping;
+        sliding = isSliding;   // 렌더는 step 뒤에 돌고 signal 을 못 본다
 
         laneVisual += (lane - laneVisual) * Math.min(1, dt * 12);
 
@@ -605,7 +667,7 @@
           const t = 1 - (jumpEndMs - nowMs) / JUMP_MS;   // 0 → 1
           hop = Math.sin(t * Math.PI) * 90;
         }
-        const h = nowMs < slideEndMs ? 30 : 70;
+        const h = sliding ? 30 : 70;
         ctx.fillStyle = '#7ef6a0';
         ctx.fillRect(
           x - 16 * p.scale,
@@ -651,15 +713,18 @@
 
     // ── 키보드 소스 — 개발 편의가 아니라 필수 인프라다.
     // 게임 로직을 고칠 때마다 2m 뒤로 물러나 뛸 수는 없다.
-    // InputMapper 와 동일하게 jump/slide 는 한 프레임짜리 엣지다
+    // InputMapper 와 신호 모양이 같아야 한다. jump 는 한 프레임짜리 엣지고,
+    // slide 는 유지 상태다 — 몸을 숙이고 있는 것이 ArrowDown 을 누르고 있는 것에 대응한다
     function createKeyboardSource() {
       let lane = 1;
       let jump = false;
       let slide = false;
 
+      const typing = (t) =>
+        t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+
       window.addEventListener('keydown', (e) => {
-        const t = e.target;
-        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+        if (typing(e.target)) return;
         if (e.repeat) return;
         if (e.key === 'ArrowLeft') lane = Math.max(0, lane - 1);
         else if (e.key === 'ArrowRight') lane = Math.min(2, lane + 1);
@@ -669,11 +734,16 @@
         e.preventDefault();
       });
 
+      // 키를 뗄 때까지 슬라이드가 유지된다. 입력창 가드를 걸지 않는다 —
+      // 누를 때 걸렀으면 뗄 때는 무조건 풀어야 키가 눌린 채로 굳지 않는다
+      window.addEventListener('keyup', (e) => {
+        if (e.key === 'ArrowDown') slide = false;
+      });
+
       return {
         read() {
           const signal = { lane, jump, slide, warning: null };
-          jump = false;
-          slide = false;
+          jump = false;   // 엣지라 읽으면 소비된다. slide 는 상태라 그대로 둔다
           return signal;
         },
         reset() { lane = 1; jump = false; slide = false; },
@@ -820,16 +890,25 @@
         return true;
       }
 
-      function hline(yNorm, color, label) {
+      // 두 가로선이 붙어 있으면 라벨이 겹친다. 문턱 간격은 slideRelease 와 몸통 길이에
+      // 따라 얼마든지 좁아지므로, 겹칠 수 있는 짝은 라벨을 반대쪽 끝에 둔다
+      function hline(yNorm, color, label, dash = [], side = 'left') {
         const y = yNorm * h;
+        ctx.save();
+        ctx.setLineDash(dash);
         ctx.strokeStyle = color;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.moveTo(0, y);
         ctx.lineTo(w, y);
         ctx.stroke();
-        ctx.fillStyle = color;
-        ctx.fillText(label, 4, y - 3);
+        ctx.restore();
+        if (label) {
+          ctx.fillStyle = color;
+          ctx.textAlign = side;
+          ctx.fillText(label, side === 'left' ? 4 : w - 4, y - 3);
+          ctx.textAlign = 'left';
+        }
       }
 
       function vline(xNorm, color, dash) {
@@ -855,9 +934,13 @@
         if (d.torsoLen == null) return;
         ctx.font = '10px ui-monospace, Menlo, monospace';
 
-        // 발목이 이 선 위로 올라가면 점프, 눈이 이 선 아래로 내려가면 슬라이드
+        // 발목이 이 선 위로 올라가면 점프한다
         hline(d.baselineAnkleY - cfg.jumpThreshold * d.torsoLen, '#7ef6a0', '점프');
+        // 눈이 실선 아래로 내려가면 슬라이드가 걸리고, 점선 위로 올라와야 풀린다.
+        // 두 선 사이가 히스테리시스 구간이다 — 여기서는 걸려 있든 풀려 있든 유지된다
         hline(d.baselineEyeY + cfg.slideThreshold * d.torsoLen, '#ffd166', '슬라이드');
+        hline(d.baselineEyeY + cfg.slideThreshold * cfg.slideRelease * d.torsoLen,
+              'rgba(255,209,102,0.5)', '해제', [3, 3], 'right');
 
         // 실선은 가운데서 나가는 경계, 점선은 가운데로 돌아오는 경계다.
         // 둘 사이 간격이 곧 레인 떨림을 막는 히스테리시스 폭이다
