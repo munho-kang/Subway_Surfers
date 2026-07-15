@@ -75,27 +75,17 @@ def test_post_rejects_non_integer_score(client):
     assert worksheet.append_row.call_count == 0
 
 
-def test_post_rejects_non_object_json_body(client):
-    worksheet = _mock_worksheet()
-    with patch.object(sheets, "_worksheet", return_value=worksheet):
-        # Test with null
-        response = client.post(
-            "/api/scores/",
-            data="null",
-            content_type="application/json",
-        )
-    assert response.status_code == 400
-    assert worksheet.append_row.call_count == 0
-
-    with patch.object(sheets, "_worksheet", return_value=worksheet):
-        # Test with list
-        response = client.post(
-            "/api/scores/",
-            data=json.dumps([1, 2, 3]),
-            content_type="application/json",
-        )
-    assert response.status_code == 400
-    assert worksheet.append_row.call_count == 0
+def test_post_rejects_non_dict_body(client):
+    # json.loads 는 통과하지만 dict 가 아닌 본문들이다.
+    # 가드가 없으면 payload.get() 이 AttributeError 를 내고 400 이 아니라 500 이 된다
+    for body in ["null", "42", '"x"', "[1,2,3]"]:
+        worksheet = _mock_worksheet()
+        with patch.object(sheets, "_worksheet", return_value=worksheet):
+            response = client.post(
+                "/api/scores/", data=body, content_type="application/json"
+            )
+        assert response.status_code == 400, f"본문 {body} 가 400 이 아니다"
+        assert worksheet.append_row.call_count == 0
 
 
 def test_sheet_failure_becomes_error_response_not_crash(client):
