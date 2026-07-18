@@ -131,10 +131,12 @@
       laneAlpha: 0.3,         // 레인 x EMA
       animMs: 600,            // Game의 JUMP_MS와 값을 맞춰야 한다 (아래 "── Game" 섹션)
       refractoryMs: 300,
-      laneOutLeft: 0.30,      // 가운데 → 왼쪽
-      laneOutRight: 0.70,     // 가운데 → 오른쪽
-      laneInLeft: 0.36,       // 왼쪽 → 가운데
-      laneInRight: 0.64,      // 오른쪽 → 가운데
+      // 가운데에서 0.10 만 벗어나도 레인이 바뀐다 (예전엔 0.20 이라 너무 멀리 가야 했다).
+      // laneIn 은 되돌아올 때의 문턱이라 laneOut 안쪽에 둬 경계에서 떠는 것을 막는다
+      laneOutLeft: 0.40,      // 가운데 → 왼쪽
+      laneOutRight: 0.60,     // 가운데 → 오른쪽
+      laneInLeft: 0.46,       // 왼쪽 → 가운데
+      laneInRight: 0.54,      // 오른쪽 → 가운데
     };
 
     function midpoint(a, b) {
@@ -437,8 +439,8 @@
         let flips = 0;
         let prev = 1;
         for (let i = 0; i < 40; i++) {
-          // hipX 0.695/0.705 → laneX 0.305/0.295. 경계 0.30 을 사이에 두고 진동한다
-          const hipX = 0.695 + (i % 2) * 0.01;
+          // hipX 0.595/0.605 → laneX 0.405/0.395. 경계 0.40 을 사이에 두고 진동한다
+          const hipX = 0.595 + (i % 2) * 0.01;
           const s = m.update(makePose({ hipX }), 2000 + i * 33);
           if (s.lane !== prev) { flips++; prev = s.lane; }
         }
