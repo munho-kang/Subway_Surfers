@@ -6,69 +6,291 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="csrf-token" content="{{ csrf_token }}" />
   <title>포즈 러너</title>
+  <!-- 표제용 서체. 네온 글로우는 획이 굵어야 살아서 한글까지 덮는 헤비 페이스를 쓴다.
+       못 받아오면 시스템 고딕으로 떨어질 뿐 화면은 그대로 돈다 -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&display=swap" rel="stylesheet" />
   <style>
+    /* ── 세계관 토큰 — 밤의 터널: 깊은 남색 바탕, 보랏빛 지평선, 청록 네온.
+       캔버스도 같은 값을 쓴다 (아래 "── 팔레트" 섹션과 짝을 맞춘다) */
+    :root {
+      --void: #05070f;
+      --deep: #0a0e1f;
+      --panel: #0d1226;
+      --panel-2: #121a35;
+      --edge: rgba(125, 214, 255, 0.16);
+      --edge-strong: rgba(125, 214, 255, 0.38);
+      --ink: #eaf1ff;
+      --ink-dim: #98abd0;
+      --ink-faint: #7488b0;
+      --cyan: #4de3ff;
+      --mint: #7ef6a0;
+      --gold: #ffd34d;
+      --ember: #ff6a4d;
+      --violet: #b06dff;
+      --r: 14px;
+      --ease: cubic-bezier(0.16, 1, 0.3, 1);
+      --display: 'Black Han Sans', 'Apple SD Gothic Neo', system-ui, sans-serif;
+      color-scheme: dark;
+    }
+
     * { box-sizing: border-box; }
+
     body {
-      margin: 0; background: #0b1020; color: #e8ecf5;
+      margin: 0; background: var(--deep); color: var(--ink);
       font-family: system-ui, -apple-system, "Apple SD Gothic Neo", sans-serif;
       overflow: hidden;
+      -webkit-font-smoothing: antialiased;
     }
-    #stage { position: relative; width: 100vw; height: 100vh; }
+
+    /* 브라우저가 기본으로 그려주는 것들도 이 세계에 속한다 */
+    ::selection { background: rgba(77, 227, 255, 0.32); color: #fff; }
+    :focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+
+    #stage { position: relative; width: 100vw; height: 100dvh; }
     #canvas { display: block; width: 100%; height: 100%; }
+
+    /* ── 카메라 미리보기 */
     #cam {
-      position: absolute; right: 16px; bottom: 16px; z-index: 1;
-      width: 200px; border-radius: 10px; overflow: hidden;
-      border: 1px solid rgba(255,255,255,0.15); line-height: 0;
+      position: absolute; right: 18px; bottom: 18px; z-index: 1;
+      width: 200px; border-radius: 12px; overflow: hidden; line-height: 0;
+      border: 1px solid var(--edge);
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
     }
     /* 웹캠은 거울이 아니다. 프리뷰를 뒤집어야 사용자의 왼쪽과 화면의 왼쪽이 맞는다 */
-    #preview { display: block; width: 100%; opacity: 0.75; transform: scaleX(-1); }
+    #preview { display: block; width: 100%; opacity: 0.8; transform: scaleX(-1); }
     /* 오버레이는 뒤집지 않는다. laneX = 1 - hip.x 가 이미 거울 좌표라 그대로 x 로 쓰면
        맞고, 여기에 scaleX(-1) 을 걸면 선은 맞아도 글자가 뒤집힌다 */
     #overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+    /* ── 디버그 패널 — 튜닝 도구다. 꾸미지 않고 읽히기만 하면 된다 */
     #debug {
-      position: absolute; left: 16px; bottom: 16px;
-      width: 260px; padding: 12px 14px; border-radius: 10px;
-      background: rgba(8,12,26,0.85); border: 1px solid rgba(255,255,255,0.12);
+      position: absolute; left: 18px; bottom: 18px; z-index: 1;
+      width: 260px; padding: 12px 14px; border-radius: 12px;
+      background: rgba(8, 12, 26, 0.88); border: 1px solid var(--edge);
       font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
     }
     #debug h3 { margin: 0 0 8px; font-size: 12px; letter-spacing: 0.04em; }
     #debug label { display: block; margin-top: 8px; }
-    #debug input[type=range] { width: 100%; }
+    #debug input[type=range] { width: 100%; accent-color: var(--cyan); }
     #debug .row { display: flex; justify-content: space-between; }
+
+    /* ── 경고 배너 — 지금 조작이 안 먹는 이유를 알려주는 유일한 통로다 */
     #banner {
-      position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
-      padding: 10px 18px; border-radius: 999px; background: rgba(229,83,61,0.92);
+      position: absolute; top: 20px; left: 50%; z-index: 2;
+      transform: translateX(-50%);
+      padding: 11px 20px; border-radius: 999px;
+      background: rgba(255, 106, 77, 0.14);
+      border: 1px solid rgba(255, 106, 77, 0.55);
+      color: #ffcbbf;
       font-size: 14px; font-weight: 600; display: none;
+      backdrop-filter: blur(12px);
+      animation: drop 0.32s var(--ease);
     }
-    .screen {
-      position: absolute; inset: 0; display: flex; flex-direction: column;
-      align-items: center; justify-content: center; gap: 18px;
-      background: rgba(11,16,32,0.94); text-align: center; padding: 24px;
-    }
-    .screen h1 { margin: 0; font-size: 34px; letter-spacing: -0.02em; }
-    .screen p { margin: 0; color: rgba(232,236,245,0.7); line-height: 1.7; }
-    #nickname {
-      padding: 12px 16px; width: 260px; font-size: 16px; text-align: center;
-      border-radius: 10px; border: 1px solid rgba(255,255,255,0.2);
-      background: rgba(255,255,255,0.06); color: #e8ecf5;
-    }
-    button {
-      padding: 13px 30px; font-size: 16px; font-weight: 600; cursor: pointer;
-      border-radius: 10px; border: 0; background: #7ef6a0; color: #08121f;
-    }
-    button:disabled { opacity: 0.4; cursor: not-allowed; }
-    #ranking { list-style: none; padding: 0; margin: 0; width: 280px; }
-    #ranking li {
-      display: flex; justify-content: space-between; padding: 7px 12px;
-      border-bottom: 1px solid rgba(255,255,255,0.08); font-size: 14px;
-    }
-    #count { font-size: 120px; font-weight: 700; line-height: 1; }
+    @keyframes drop { from { opacity: 0; transform: translate(-50%, -14px); } }
+
     #toast {
-      position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%);
-      padding: 10px 18px; border-radius: 999px; font-size: 14px;
-      background: rgba(255,255,255,0.14); display: none;
+      position: absolute; bottom: 26px; left: 50%; z-index: 2;
+      transform: translateX(-50%);
+      padding: 11px 20px; border-radius: 999px; font-size: 14px;
+      background: rgba(13, 18, 38, 0.92); border: 1px solid var(--edge);
+      color: var(--ink); display: none;
+      backdrop-filter: blur(12px);
+      animation: rise 0.32s var(--ease);
+    }
+    @keyframes rise { from { opacity: 0; transform: translate(-50%, 14px); } }
+
+    /* ── 화면 — 캔버스 위에 덮인다. 뒤의 트랙이 비쳐야 게임 안에 있는 느낌이 산다 */
+    .screen {
+      position: absolute; inset: 0; z-index: 3;
+      display: flex; align-items: center; justify-content: center;
+      padding: 28px; overflow: auto;
+      background:
+        radial-gradient(120% 90% at 50% 0%, rgba(90, 40, 160, 0.30), transparent 60%),
+        rgba(5, 7, 15, 0.62);
+      backdrop-filter: blur(7px) saturate(1.15);
     }
     .hidden { display: none !important; }
+
+    .panel {
+      width: min(880px, 100%);
+      padding: 34px;
+      border-radius: 22px;
+      background: linear-gradient(180deg, rgba(18, 26, 53, 0.86), rgba(10, 14, 31, 0.9));
+      border: 1px solid var(--edge);
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+      animation: enter 0.5s var(--ease);
+    }
+    @keyframes enter { from { opacity: 0; transform: translateY(18px) scale(0.985); } }
+
+    .title {
+      margin: 0;
+      font-family: var(--display);
+      font-size: clamp(44px, 8vw, 76px);
+      font-weight: 400;
+      line-height: 0.95;
+      letter-spacing: -0.02em;
+      color: #fff;
+      /* 네온은 장식이 아니라 이 세계의 광원이다 */
+      text-shadow:
+        0 0 8px rgba(77, 227, 255, 0.6),
+        0 0 26px rgba(77, 227, 255, 0.38),
+        0 0 60px rgba(77, 227, 255, 0.2);
+    }
+
+    .lede { margin: 0; color: var(--ink-dim); line-height: 1.75; font-size: 15px; }
+    .lede.dim { color: var(--ink-faint); font-size: 13px; }
+
+    /* ── 시작 화면 — 넓으면 좌우로, 좁으면 위아래로 */
+    .start-panel {
+      display: grid; gap: 34px;
+      grid-template-columns: 1fr;
+    }
+    @media (min-width: 760px) {
+      .start-panel { grid-template-columns: 1.15fr 0.85fr; align-items: start; }
+      .start-rank { border-left: 1px solid var(--edge); padding-left: 34px; }
+    }
+    .start-main { display: flex; flex-direction: column; gap: 18px; }
+
+    .field { display: flex; gap: 10px; margin-top: 4px; }
+    #nickname {
+      flex: 1; min-width: 0;
+      padding: 14px 16px; font-size: 16px;
+      border-radius: var(--r);
+      border: 1px solid var(--edge);
+      background: rgba(5, 7, 15, 0.6);
+      color: var(--ink);
+      caret-color: var(--cyan);
+      transition: border-color 0.2s var(--ease), background 0.2s var(--ease);
+    }
+    #nickname::placeholder { color: var(--ink-faint); }
+    #nickname:focus {
+      outline: none;
+      border-color: var(--edge-strong);
+      background: rgba(5, 7, 15, 0.85);
+    }
+    #nickname:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+
+    button {
+      padding: 14px 30px; font-size: 16px; font-weight: 700; cursor: pointer;
+      border-radius: var(--r); border: 0;
+      background: var(--mint); color: #062012;
+      font-family: inherit;
+      transition: transform 0.18s var(--ease), box-shadow 0.18s var(--ease), filter 0.18s var(--ease);
+      box-shadow: 0 6px 18px rgba(126, 246, 160, 0.22);
+    }
+    button:hover { transform: translateY(-2px); box-shadow: 0 12px 28px rgba(126, 246, 160, 0.34); }
+    button:active { transform: translateY(0); filter: brightness(0.94); }
+    button:disabled { opacity: 0.4; cursor: not-allowed; transform: none; box-shadow: none; }
+
+    /* ── 조작 안내 — 키에 적힌 글자를 키 모양 그대로 보여준다 */
+    .keys { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 9px; }
+    .keys li {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 13px; color: var(--ink-dim);
+    }
+    .cap {
+      min-width: 26px; height: 26px; padding: 0 7px;
+      display: inline-flex; align-items: center; justify-content: center;
+      border-radius: 7px;
+      border: 1px solid var(--edge);
+      border-bottom-width: 2px;
+      background: rgba(5, 7, 15, 0.7);
+      color: var(--ink);
+      font-size: 12px; font-weight: 600;
+    }
+
+    /* ── 랭킹 */
+    .start-rank h2 {
+      margin: 0 0 14px;
+      font-size: 13px; font-weight: 700;
+      letter-spacing: 0.18em; text-transform: uppercase;
+      color: var(--ink-faint);
+    }
+    #ranking { list-style: none; padding: 0; margin: 0; max-height: 470px; overflow-y: auto; }
+    #ranking li {
+      display: grid; grid-template-columns: 26px 1fr auto;
+      align-items: center; gap: 10px;
+      padding: 9px 2px;
+      border-bottom: 1px solid rgba(125, 214, 255, 0.08);
+      font-size: 14px;
+    }
+    #ranking li:last-child { border-bottom: 0; }
+    .rk { font-size: 12px; font-weight: 700; color: var(--ink-faint); text-align: center; }
+    .rk-1 { color: var(--gold); }
+    .rk-2 { color: #d7e2f5; }
+    .rk-3 { color: #e0a06a; }
+    .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sc { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--ink); }
+    /* 안내 문구는 등수 칸에 들어갈 것이 아니다. 격자를 벗어나 한 줄로 흐른다 */
+    #ranking li.rank-note {
+      display: block; border-bottom: 0;
+      color: var(--ink-faint); font-size: 13px; padding: 9px 2px;
+    }
+    #ranking::-webkit-scrollbar { width: 6px; }
+    #ranking::-webkit-scrollbar-thumb { background: var(--edge); border-radius: 3px; }
+    #ranking::-webkit-scrollbar-track { background: transparent; }
+
+    /* ── 카운트다운 — 이 화면이 이 게임의 순간이다. 링이 닫히는 동안 뒤로 물러난다 */
+    .countdown-panel {
+      display: flex; flex-direction: column; align-items: center; gap: 26px;
+      text-align: center;
+    }
+    .ring { position: relative; display: grid; place-items: center; width: 224px; height: 224px; }
+    .ring-track {
+      position: absolute; inset: 0; border-radius: 50%;
+      background: conic-gradient(
+        from -90deg,
+        var(--cyan) calc(var(--p, 1) * 360deg),
+        rgba(125, 214, 255, 0.12) 0
+      );
+      -webkit-mask: radial-gradient(circle, transparent 96px, #000 97px);
+              mask: radial-gradient(circle, transparent 96px, #000 97px);
+      filter: drop-shadow(0 0 14px rgba(77, 227, 255, 0.45));
+    }
+    #count {
+      position: relative;
+      font-family: var(--display); font-weight: 400;
+      font-size: 104px; line-height: 1; color: #fff;
+      font-variant-numeric: tabular-nums;
+      text-shadow: 0 0 10px rgba(77, 227, 255, 0.55), 0 0 44px rgba(77, 227, 255, 0.28);
+    }
+
+    /* ── 결과 화면 */
+    .over-panel {
+      width: min(460px, 100%);
+      display: flex; flex-direction: column; align-items: center; gap: 18px;
+      text-align: center;
+    }
+    .score-big {
+      margin: 0;
+      font-family: var(--display); font-weight: 400;
+      font-size: clamp(64px, 14vw, 104px); line-height: 1; color: #fff;
+      font-variant-numeric: tabular-nums;
+      text-shadow: 0 0 10px rgba(126, 246, 160, 0.5), 0 0 46px rgba(126, 246, 160, 0.24);
+    }
+    .score-big .unit { font-size: 0.34em; color: var(--ink-dim); margin-left: 0.22em; text-shadow: none; }
+    .status { margin: 0; display: flex; align-items: center; gap: 9px; font-size: 14px; color: var(--ink-dim); }
+    .status::before {
+      content: ''; width: 7px; height: 7px; border-radius: 50%;
+      background: var(--ink-faint); flex: none;
+    }
+    .status.ok::before { background: var(--mint); box-shadow: 0 0 10px rgba(126, 246, 160, 0.7); }
+    .status.bad::before { background: var(--ember); box-shadow: 0 0 10px rgba(255, 106, 77, 0.7); }
+    /* 2.5초 뒤 시작 화면으로 돌아간다. 얼마나 남았는지 보여준다 */
+    .restart-bar { width: 150px; height: 2px; background: var(--edge); border-radius: 2px; overflow: hidden; }
+    .restart-bar i { display: block; height: 100%; background: var(--cyan); transform-origin: left; }
+    .restart-bar.run i { animation: drain 2.5s linear forwards; }
+    @keyframes drain { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+
+    /* 움직임에 민감한 사용자에게는 연출을 걷어낸다. 게임 자체는 내용이라 남긴다 */
+    @media (prefers-reduced-motion: reduce) {
+      .panel, #banner, #toast { animation: none; }
+      .restart-bar.run i { animation: none; transform: scaleX(0); }
+      button { transition: none; }
+      button:hover { transform: none; }
+    }
   </style>
 </head>
 <body>
@@ -78,32 +300,54 @@
       <video id="preview" playsinline muted></video>
       <canvas id="overlay"></canvas>
     </div>
-    <div id="banner"></div>
+    <div id="banner" role="status"></div>
     <div id="debug" class="hidden"></div>
 
     <div id="start" class="screen">
-      <h1>포즈 러너</h1>
-      <p>앉아서 닉네임을 넣고 시작을 누르세요.<br />
-         시작하면 5초 안에 1.5~2m 뒤로 물러나 전신이 보이게 서세요.</p>
-      <input id="nickname" maxlength="12" placeholder="닉네임 (최대 12자)" />
-      <button id="start-btn">시작</button>
-      <h3 style="margin:8px 0 0">TOP 10</h3>
-      <ol id="ranking"><li>불러오는 중…</li></ol>
-      <p style="font-size:12px">카메라를 못 쓰면 화살표 키로 조작합니다. D 키로 디버그 패널.</p>
+      <div class="panel start-panel">
+        <div class="start-main">
+          <h1 class="title">포즈 러너</h1>
+          <p class="lede">앉아서 닉네임을 넣고 시작을 누르세요.<br />
+             시작하면 5초 안에 1.5~2m 뒤로 물러나 전신이 보이게 서세요.</p>
+          <div class="field">
+            <input id="nickname" maxlength="12" placeholder="닉네임 (최대 12자)" aria-label="닉네임" />
+            <button id="start-btn">시작</button>
+          </div>
+          <ul class="keys">
+            <li><span class="cap">←</span><span class="cap">→</span> 몸을 좌우로 옮기거나 방향키로 레인 이동</li>
+            <li><span class="cap">↑</span><span class="cap">Space</span> 제자리에서 뛰면 점프</li>
+            <li><span class="cap">↓</span> 쪼그리면 슬라이드</li>
+            <li><span class="cap">D</span> 디버그 패널 열기</li>
+          </ul>
+          <p class="lede dim">카메라를 못 쓰면 방향키로 그대로 플레이할 수 있습니다.</p>
+        </div>
+        <aside class="start-rank">
+          <h2>Top 10</h2>
+          <ol id="ranking"><li class="rank-note">불러오는 중…</li></ol>
+        </aside>
+      </div>
     </div>
 
     <div id="countdown" class="screen hidden">
-      <p>뒤로 물러나 가만히 서세요</p>
-      <div id="count">5</div>
-      <p>이 자세를 기준으로 잡습니다</p>
+      <div class="panel countdown-panel">
+        <p class="lede">뒤로 물러나 가만히 서세요</p>
+        <div class="ring">
+          <div class="ring-track" id="ring-track"></div>
+          <div id="count">5</div>
+        </div>
+        <p class="lede dim">이 자세를 기준으로 잡습니다</p>
+      </div>
     </div>
 
     <div id="gameover" class="screen hidden">
-      <h1 id="final-score">0점</h1>
-      <p id="submit-state">점수를 보내는 중…</p>
+      <div class="panel over-panel">
+        <h1 id="final-score" class="score-big">0<span class="unit">점</span></h1>
+        <p id="submit-state" class="status">점수를 보내는 중…</p>
+        <div class="restart-bar" id="restart-bar"><i></i></div>
+      </div>
     </div>
 
-    <div id="toast"></div>
+    <div id="toast" role="status"></div>
   </div>
   <script type="module">
     // ── 상수·랜드마크 인덱스·공용 헬퍼
@@ -591,6 +835,151 @@
       return width / 2 + (laneFloat - 1) * LANE_SPREAD * width * scale;
     }
 
+    // ── 팔레트 — 위 CSS :root 와 같은 값이다. 한쪽만 바꾸면 화면이 갈라진다
+    const C = {
+      skyTop: '#05070f', skyMid: '#141033', skyHorizon: '#3a1d63',
+      groundFar: '#161f42', groundMid: '#0b1128', groundNear: '#070a18',
+      ink: '#eaf1ff', inkDim: '#98abd0',
+      cyan: '#4de3ff', mint: '#7ef6a0', mintDark: '#3fbf74',
+      gold: '#ffd34d', goldLight: '#fff2b8',
+      ember: '#ff6a4d', emberLight: '#ffb199', emberDark: '#7a2418',
+      violet: '#b06dff', violetDark: '#3b1a6b', violetLight: '#d8b4ff',
+    };
+    const DISPLAY_FONT = "'Black Han Sans', 'Apple SD Gothic Neo', system-ui, sans-serif";
+    // 그림만 키우는 배율. project() 도 충돌 판정도 건드리지 않는다 —
+    // 원근이 맞아도 실물이 작으면 뭘 피하는지가 안 보인다
+    const WORLD_SCALE = 2.3;
+
+    // 지평선 위가 화면의 3분의 1이다. 비워두면 그만큼이 죽는다.
+    // 실루엣은 한 번만 만들고 스크롤만 시킨다
+    const SKYLINE = (() => {
+      const rng = mulberry32(7);
+      const out = [];
+      for (let x = 0; x < 1; ) {
+        const w = 0.028 + rng() * 0.05;
+        out.push({ x, w, h: 0.22 + rng() * 0.78 });
+        x += w + rng() * 0.018;
+      }
+      return out;
+    })();
+
+    // 그라디언트는 크기가 바뀔 때만 다시 만든다. 매 프레임 만들면 그냥 낭비다
+    let gcache = { key: '' };
+    function grads(ctx, W, H) {
+      const key = `${W}x${H}`;
+      if (gcache.key === key) return gcache;
+      const hy = H * HORIZON_RATIO;
+
+      const sky = ctx.createLinearGradient(0, 0, 0, hy);
+      sky.addColorStop(0, C.skyTop);
+      sky.addColorStop(0.55, C.skyMid);
+      sky.addColorStop(1, C.skyHorizon);
+
+      const ground = ctx.createLinearGradient(0, hy, 0, H);
+      ground.addColorStop(0, C.groundFar);
+      ground.addColorStop(0.35, C.groundMid);
+      ground.addColorStop(1, C.groundNear);
+
+      // 지평선의 빛무리 — 도시가 뒤에서 타고 있다
+      const haze = ctx.createLinearGradient(0, hy - H * 0.15, 0, hy + H * 0.05);
+      haze.addColorStop(0, 'rgba(140, 90, 255, 0)');
+      haze.addColorStop(0.7, 'rgba(140, 90, 255, 0.22)');
+      haze.addColorStop(0.88, 'rgba(120, 220, 255, 0.30)');
+      haze.addColorStop(1, 'rgba(120, 220, 255, 0)');
+
+      // 레인 라인 — 아래는 진하고 지평선에서 사라진다
+      const fade = (rgb, a) => {
+        const g = ctx.createLinearGradient(0, H, 0, hy);
+        g.addColorStop(0, `rgba(${rgb}, ${a})`);
+        g.addColorStop(0.5, `rgba(${rgb}, ${a * 0.85})`);
+        g.addColorStop(1, `rgba(${rgb}, 0)`);
+        return g;
+      };
+      const laneGlow = fade('77, 227, 255', 0.22);
+      const laneCore = fade('165, 243, 255', 0.95);
+
+      const vignette = ctx.createRadialGradient(
+        W / 2, H * 0.56, Math.min(W, H) * 0.28,
+        W / 2, H * 0.56, Math.max(W, H) * 0.78
+      );
+      vignette.addColorStop(0, 'rgba(3, 5, 14, 0)');
+      vignette.addColorStop(1, 'rgba(3, 5, 14, 0.75)');
+
+      gcache = { key, sky, ground, haze, laneGlow, laneCore, vignette };
+      return gcache;
+    }
+
+    // 배경 전부 — 하늘, 스카이라인, 바닥, 흐르는 격자, 레인 라인.
+    // scroll 은 z 단위의 이동 거리다. 격자가 이만큼 다가온다
+    function drawWorld(ctx, W, H, scroll) {
+      const g = grads(ctx, W, H);
+      const hy = H * HORIZON_RATIO;
+
+      ctx.fillStyle = g.sky;
+      ctx.fillRect(0, 0, W, hy);
+
+      // 스카이라인은 아주 느리게 흐른다. 멀리 있는 것은 천천히 지나간다
+      const shift = (scroll * 0.0009) % 1;
+      ctx.fillStyle = '#0c0722';
+      for (const b of SKYLINE) {
+        const bx = (((b.x - shift) % 1) + 1) % 1;
+        const bw = b.w * W;
+        const bh = b.h * hy * 0.62;
+        ctx.fillRect(bx * W, hy - bh, bw, bh);
+        if (bx * W + bw > W) ctx.fillRect(bx * W - W, hy - bh, bw, bh);
+      }
+
+      ctx.fillStyle = g.haze;
+      ctx.fillRect(0, hy - H * 0.15, W, H * 0.2);
+
+      ctx.fillStyle = g.ground;
+      ctx.fillRect(0, hy, W, H - hy);
+
+      // 소실점. 멀어질수록 scale 이 0 으로 가므로 모든 레인이 여기서 만난다
+      const near = project(0, H);
+      const vx = W / 2;
+
+      // 달리는 면 — 바깥 두 라인 사이를 살짝 밝혀 트랙이 '바닥'이 아니라 '길'로 읽히게 한다
+      ctx.fillStyle = 'rgba(77, 227, 255, 0.055)';
+      ctx.beginPath();
+      ctx.moveTo(laneScreenX(-0.5, near.scale, W), near.y);
+      ctx.lineTo(laneScreenX(2.5, near.scale, W), near.y);
+      ctx.lineTo(vx, hy);
+      ctx.closePath();
+      ctx.fill();
+
+      // 가로 격자 — 세계가 실제로 흐르고 있다는 유일한 증거다.
+      // 선은 세계 좌표에 고정돼 있고 카메라가 다가간다
+      const SPACING = 7;
+      ctx.lineWidth = 1;
+      for (let z = SPACING - (scroll % SPACING); z < Z_SPAWN; z += SPACING) {
+        const p = project(z, H);
+        ctx.strokeStyle = `rgba(125, 214, 255, ${(0.34 * p.scale).toFixed(3)})`;
+        ctx.beginPath();
+        ctx.moveTo(laneScreenX(-2.4, p.scale, W), p.y);
+        ctx.lineTo(laneScreenX(4.4, p.scale, W), p.y);
+        ctx.stroke();
+      }
+
+      // 레인 라인 — 넓고 흐린 선 위에 좁고 밝은 선을 겹쳐 발광을 흉내낸다.
+      // shadowBlur 는 프레임을 잡아먹는다. 포즈 추적이 이미 무겁다
+      ctx.lineCap = 'butt';
+      for (const edge of [-0.5, 0.5, 1.5, 2.5]) {
+        const outer = edge === -0.5 || edge === 2.5;
+        ctx.globalAlpha = outer ? 1 : 0.3;
+        ctx.beginPath();
+        ctx.moveTo(laneScreenX(edge, near.scale, W), near.y);
+        ctx.lineTo(vx, hy);
+        ctx.strokeStyle = g.laneGlow;
+        ctx.lineWidth = outer ? 11 : 6;
+        ctx.stroke();
+        ctx.strokeStyle = g.laneCore;
+        ctx.lineWidth = outer ? 2.4 : 1.4;
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+
     // 결정적 난수. 시드를 고정하면 같은 코스가 재현된다
     function mulberry32(seed) {
       let a = seed;
@@ -716,26 +1105,173 @@
         objects = objects.filter((o) => !o.dead && o.z > Z_DESPAWN);
       }
 
+      // 바닥 그림자 — 물체가 얼마나 가까운지 알려주는 가장 싼 단서다.
+      // 한 겹이면 가장자리가 칼로 자른 것처럼 보인다. 두 겹으로 번지게 한다
+      function groundShadow(x, y, halfW, s, alpha) {
+        const ry = Math.max(1, 7 * s);
+        ctx.fillStyle = `rgba(0, 0, 0, ${(alpha * 0.45).toFixed(3)})`;
+        ctx.beginPath();
+        ctx.ellipse(x, y, halfW * 1.35, ry * 1.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = `rgba(0, 0, 0, ${(alpha * 0.7).toFixed(3)})`;
+        ctx.beginPath();
+        ctx.ellipse(x, y, halfW, ry, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
       function drawObject(o, W, H) {
         const p = project(o.z, H);
         if (p.scale <= 0.02) return;
         const x = laneScreenX(o.lane, p.scale, W);
         const w = LANE_SPREAD * W * p.scale * 0.7;
+        const vs = p.scale * WORLD_SCALE;             // 세로 치수용 배율
+        const px = (n) => Math.max(1, n * vs);        // 멀어져도 획이 사라지지 않게
+
         if (o.kind === 'coin') {
-          ctx.fillStyle = '#ffd34d';
+          const cy = p.y - 62 * vs;
+          const r = 15 * vs;
+          // 돌아가는 금화 — 폭만 줄였다 늘렸다 하면 회전으로 읽힌다
+          const spin = 0.16 + 0.84 * Math.abs(Math.cos(nowMs / 320 + o.lane * 1.7));
+          ctx.fillStyle = 'rgba(255, 211, 77, 0.2)';
           ctx.beginPath();
-          ctx.arc(x, p.y - 60 * p.scale, 14 * p.scale, 0, Math.PI * 2);
+          ctx.arc(x, cy, r * 1.9, 0, Math.PI * 2);
           ctx.fill();
-        } else if (o.kind === 'barricade') {
-          ctx.fillStyle = '#e5533d';
-          ctx.fillRect(x - w / 2, p.y - 30 * p.scale, w, 30 * p.scale);
-        } else if (o.kind === 'beam') {
-          ctx.fillStyle = '#4da3ff';
-          ctx.fillRect(x - w / 2, p.y - 150 * p.scale, w, 30 * p.scale);
-        } else {
-          ctx.fillStyle = '#9b6dff';
-          ctx.fillRect(x - w / 4, p.y - 160 * p.scale, w / 2, 160 * p.scale);
+          ctx.fillStyle = C.gold;
+          ctx.beginPath();
+          ctx.ellipse(x, cy, r * spin, r, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = C.goldLight;
+          ctx.beginPath();
+          ctx.ellipse(x, cy, r * spin * 0.5, r * 0.5, 0, 0, Math.PI * 2);
+          ctx.fill();
+          return;
         }
+
+        if (o.kind === 'barricade') {
+          const h = 44 * vs;   // 러너 가슴 높이. 이만하면 '뛰어넘어야 한다' 로 읽힌다
+          const top = p.y - h;
+          groundShadow(x, p.y, w * 0.55, vs, 0.4);
+          ctx.fillStyle = C.emberDark;
+          ctx.fillRect(x - w / 2, top, w, h);
+          // 경고 줄무늬 — 몸통 안으로만 자른다
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(x - w / 2, top, w, h);
+          ctx.clip();
+          ctx.fillStyle = C.ember;
+          const sw = Math.max(4, 13 * p.scale);
+          for (let sx = x - w / 2 - h; sx < x + w / 2 + h; sx += sw * 2) {
+            ctx.beginPath();
+            ctx.moveTo(sx, p.y);
+            ctx.lineTo(sx + sw, p.y);
+            ctx.lineTo(sx + sw + h, top);
+            ctx.lineTo(sx + h, top);
+            ctx.closePath();
+            ctx.fill();
+          }
+          ctx.restore();
+          // 윗면 — 얇은 밝은 띠 하나가 두께를 만든다
+          ctx.fillStyle = C.emberLight;
+          ctx.fillRect(x - w / 2, top - px(3), w, px(3));
+          return;
+        }
+
+        if (o.kind === 'beam') {
+          // 아래 끝이 러너 키(70)보다 낮고 슬라이드 높이(약 31)보다 높아야
+          // '숙여야 지나간다' 가 눈으로 읽힌다
+          const bh = 30 * vs;
+          const top = p.y - 78 * vs;
+          ctx.fillStyle = '#0f4a6e';
+          ctx.fillRect(x - w / 2, top, w, bh);
+          ctx.fillStyle = 'rgba(180, 245, 255, 0.5)';
+          ctx.fillRect(x - w / 2, top, w, px(2));
+          // 아래쪽 모서리를 밝힌다. 몸을 숙여 지나갈 틈이 여기다
+          ctx.fillStyle = C.cyan;
+          ctx.fillRect(x - w / 2, top + bh - px(5), w, px(5));
+          return;
+        }
+
+        // pillar — 레인을 바꾸는 수밖에 없다. 가장 굵고 가장 어둡다
+        const ph = 160 * vs;
+        const pw = w / 2;
+        groundShadow(x, p.y, pw * 0.7, vs, 0.45);
+        ctx.fillStyle = C.violetDark;
+        ctx.fillRect(x - pw / 2, p.y - ph, pw, ph);
+        // 한쪽 모서리만 밝혀 둥글게 보이게 한다
+        ctx.fillStyle = C.violet;
+        ctx.fillRect(x - pw / 2, p.y - ph, px(4), ph);
+        ctx.fillStyle = C.violetLight;
+        ctx.fillRect(x - pw / 2, p.y - ph, pw, px(5));
+      }
+
+      // ── 러너 — 뒤에서 본 모습. 팔다리는 굵은 선 하나씩이고,
+      // 자세가 세 개(달리기·점프·슬라이드) 뿐이지만 그 셋이 게임의 전부다.
+      // 좌표는 발밑이 (0,0) 이고 위로 갈수록 음수인 캐릭터 단위다
+      function limb(x1, y1, x2, y2, width, color) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = width;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        // 살짝 휘어야 관절이 있는 것처럼 보인다
+        ctx.quadraticCurveTo((x1 + x2) / 2 + (x2 - x1) * 0.35, (y1 + y2) / 2, x2, y2);
+        ctx.stroke();
+      }
+
+      function drawRunner(x, feetY, s, phase, pose) {
+        ctx.save();
+        ctx.translate(x, feetY);
+        ctx.scale(s, s);
+        if (pose === 'slide') ctx.scale(1, 0.44);   // 납작하게 눕는다
+
+        if (pose === 'jump') {
+          limb(-6, -26, -12, -13, 8, C.mintDark);
+          limb(6, -26, 12, -13, 8, C.mint);
+          limb(-11, -49, -21, -61, 6.5, C.mintDark);
+          limb(11, -49, 21, -61, 6.5, C.mint);
+        } else if (pose === 'slide') {
+          limb(-6, -26, -16, -4, 8, C.mintDark);
+          limb(6, -26, 16, -4, 8, C.mint);
+          limb(-11, -49, -22, -43, 6.5, C.mintDark);
+          limb(11, -49, 22, -43, 6.5, C.mint);
+        } else {
+          for (const side of [-1, 1]) {
+            const p = phase + (side < 0 ? Math.PI : 0);
+            const lift = Math.max(0, Math.sin(p));
+            limb(side * 6, -26, side * 6 + Math.sin(p) * 7, -lift * 17, 8,
+                 side < 0 ? C.mintDark : C.mint);
+          }
+          // 손은 몸통(±12) 밖으로 나가야 보인다. 안쪽에 두면 몸통이 덮어버린다
+          for (const side of [-1, 1]) {
+            const p = phase + (side < 0 ? 0 : Math.PI);
+            const lift = Math.max(0, Math.sin(p));
+            limb(side * 11, -49, side * 19, -30 - lift * 15, 6.5,
+                 side < 0 ? C.mintDark : C.mint);
+          }
+        }
+
+        // 몸통과 머리는 팔다리 위에 온다
+        ctx.fillStyle = C.mint;
+        ctx.beginPath();
+        ctx.roundRect(-12, -53, 24, 30, 9);
+        ctx.fill();
+        // 세계의 광원은 청록이다. 러너에게도 같은 빛이 닿아야 한다
+        ctx.strokeStyle = 'rgba(165, 243, 255, 0.4)';
+        ctx.lineWidth = 1.3;
+        ctx.beginPath();
+        ctx.roundRect(-12, -53, 24, 30, 9);
+        ctx.stroke();
+
+        ctx.fillStyle = C.mint;
+        ctx.beginPath();
+        ctx.arc(0, -63, 9.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(6, 32, 18, 0.3)';
+        ctx.beginPath();
+        ctx.arc(0, -66, 6, 0, Math.PI * 2);   // 뒤통수 — 뒤에서 보고 있다는 표시
+        ctx.fill();
+
+        ctx.restore();
       }
 
       function drawCharacter(W, H) {
@@ -746,48 +1282,89 @@
           const t = 1 - (jumpEndMs - nowMs) / JUMP_MS;   // 0 → 1
           hop = Math.sin(t * Math.PI) * 90;
         }
-        const h = sliding ? 30 : 70;
-        ctx.fillStyle = '#7ef6a0';
-        ctx.fillRect(
-          x - 16 * p.scale,
-          p.y - (h + hop) * p.scale,
-          32 * p.scale,
-          h * p.scale
-        );
+        const s = p.scale * WORLD_SCALE;
+        // 그림자는 뜰수록 작아진다. 얼마나 높이 떠 있는지 읽는 유일한 단서다
+        const near = 1 - Math.min(hop / 110, 0.62);
+        ctx.fillStyle = `rgba(126, 246, 160, ${(0.2 * near).toFixed(3)})`;
+        ctx.beginPath();
+        ctx.ellipse(x, p.y, 28 * s * near, 9 * s * near, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = `rgba(0, 0, 0, ${(0.18 * near).toFixed(3)})`;
+        ctx.beginPath();
+        ctx.ellipse(x, p.y, 22 * s * near, 7 * s * near, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = `rgba(0, 0, 0, ${(0.32 * near).toFixed(3)})`;
+        ctx.beginPath();
+        ctx.ellipse(x, p.y, 15 * s * near, 4.5 * s * near, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        const pose = nowMs < jumpEndMs ? 'jump' : sliding ? 'slide' : 'run';
+        // 달리기 위상은 이동 거리로 돌린다. 빨라지면 발도 저절로 빨라진다
+        drawRunner(x, p.y - hop * s, s, distance * 0.55, pose);
+      }
+
+      function drawHud(W, H) {
+        const pad = 28;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'alphabetic';
+
+        const score = String(getScore());
+        ctx.font = `400 46px ${DISPLAY_FONT}`;
+        const scoreW = ctx.measureText(score).width;
+        ctx.fillStyle = C.ink;
+        ctx.fillText(score, pad, pad + 40);
+        ctx.fillStyle = C.inkDim;
+        ctx.font = '600 16px system-ui, sans-serif';
+        ctx.fillText('점', pad + scoreW + 7, pad + 40);
+
+        // 속도 게이지 — 얼마나 빨라졌는지가 곧 남은 난이도다
+        const barY = pad + 56;
+        const t = (speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED);
+        ctx.fillStyle = 'rgba(125, 214, 255, 0.16)';
+        ctx.fillRect(pad, barY, 132, 3);
+        ctx.fillStyle = C.cyan;
+        ctx.fillRect(pad, barY, 132 * Math.min(1, Math.max(0, t)), 3);
+
+        // 코인 — 아이콘도 같은 금화다. 화면 안의 것과 같은 것임이 보여야 한다
+        ctx.textBaseline = 'middle';
+        const cy = barY + 24;
+        ctx.fillStyle = C.gold;
+        ctx.beginPath();
+        ctx.arc(pad + 6, cy, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = C.inkDim;
+        ctx.font = '600 15px system-ui, sans-serif';
+        ctx.fillText(String(coins), pad + 18, cy + 1);
+        ctx.textBaseline = 'alphabetic';
+      }
+
+      function vignette(W, H, strength) {
+        const g = grads(ctx, W, H);
+        ctx.globalAlpha = strength;
+        ctx.fillStyle = g.vignette;
+        ctx.fillRect(0, 0, W, H);
+        ctx.globalAlpha = 1;
       }
 
       function render(W, H) {
-        ctx.fillStyle = '#111a33';
-        ctx.fillRect(0, 0, W, H * HORIZON_RATIO);
-        ctx.fillStyle = '#1b2a4a';
-        ctx.fillRect(0, H * HORIZON_RATIO, W, H * (1 - HORIZON_RATIO));
-
-        const near = project(0, H);
-        const far = project(Z_SPAWN, H);
-        ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-        ctx.lineWidth = 2;
-        for (const edge of [-0.5, 0.5, 1.5, 2.5]) {
-          ctx.beginPath();
-          ctx.moveTo(laneScreenX(edge, near.scale, W), near.y);
-          ctx.lineTo(laneScreenX(edge, far.scale, W), far.y);
-          ctx.stroke();
-        }
-
+        drawWorld(ctx, W, H, distance);
         for (const o of [...objects].sort((a, b) => b.z - a.z)) drawObject(o, W, H);
         drawCharacter(W, H);
+        // 빨라질수록 시야가 좁아진다. 점수판보다 먼저 칠해야 점수가 같이 어두워지지 않는다
+        const t = (speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED);
+        vignette(W, H, 0.55 + 0.45 * Math.min(1, Math.max(0, t)));
+        drawHud(W, H);
+      }
 
-        ctx.fillStyle = '#e8ecf5';
-        ctx.font = '600 24px system-ui';
-        ctx.textAlign = 'left';
-        ctx.fillText(`${getScore()}점`, 24, 44);
-        ctx.font = '400 15px system-ui';
-        ctx.fillStyle = 'rgba(232,236,245,0.65)';
-        ctx.fillText(`코인 ${coins}   속도 ${speed.toFixed(0)}`, 24, 70);
+      // 메뉴 뒤에서도 세계는 돌아간다. 배경만 그린다 — 장애물도 러너도 없다
+      function renderIdle(W, H, atMs) {
+        drawWorld(ctx, W, H, atMs * 0.006);
+        vignette(W, H, 0.6);
       }
 
       const getScore = () => Math.floor(distance) + coins * COIN_VALUE;
 
-      return { reset, step, render, getState: () => state, getScore };
+      return { reset, step, render, renderIdle, getState: () => state, getScore };
     }
 
     // ── 키보드 소스 — 개발 편의가 아니라 필수 인프라다.
@@ -1071,8 +1648,14 @@
       }
     }
 
+    // 움직임을 줄여달라는 설정은 연출에만 적용한다. 게임 자체는 내용이라 남는다
+    const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
     function boot() {
       const el = (id) => document.getElementById(id);
+      // 캔버스 fillText 는 '아직 안 받아진 웹폰트' 를 조용히 대체 글꼴로 그린다.
+      // 점수에 쓰는 글자만 미리 받아둔다. 실패해도 대체 글꼴로 그려질 뿐이다
+      document.fonts.load("400 46px 'Black Han Sans'", '0123456789점').catch(() => {});
       const startScreen = el('start');
       const countdownScreen = el('countdown');
       const gameoverScreen = el('gameover');
@@ -1120,11 +1703,13 @@
           const scores = await fetchTopScores();
           list.innerHTML = scores.length
             ? scores.map((s, i) =>
-                `<li><span>${i + 1}. ${escapeHtml(s.nickname)}</span><span>${s.score}</span></li>`
+                `<li><span class="rk rk-${i + 1}">${i + 1}</span>` +
+                `<span class="nm">${escapeHtml(s.nickname)}</span>` +
+                `<span class="sc">${s.score}</span></li>`
               ).join('')
-            : '<li>아직 기록이 없습니다</li>';
+            : '<li class="rank-note">아직 기록이 없습니다</li>';
         } catch {
-          list.innerHTML = '<li>불러올 수 없음</li>';
+          list.innerHTML = '<li class="rank-note">랭킹을 불러올 수 없습니다</li>';
         }
       }
 
@@ -1157,20 +1742,48 @@
         if (e.key === 'Enter') el('start-btn').click();
       });
 
+      // 최종 점수는 0부터 올라간다. 방금 번 것이라는 느낌은 숫자가 움직여야 생긴다
+      function countUp(node, to, ms) {
+        if (reduceMotion.matches || to <= 0) {
+          node.firstChild.textContent = String(to);
+          return;
+        }
+        const t0 = performance.now();
+        const tick = (t) => {
+          const k = Math.min(1, (t - t0) / ms);
+          node.firstChild.textContent = String(Math.round(to * (1 - Math.pow(1 - k, 3))));
+          if (k < 1) requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      }
+
+      function setStatus(text, kind) {
+        const node = el('submit-state');
+        node.textContent = text;
+        node.className = `status${kind ? ' ' + kind : ''}`;
+      }
+
       async function finishGame() {
         phase = 'gameover';
         // 여기서 지우지 않으면 루프가 'playing' 이 아니라 일찍 빠져나가는 동안
         // 마지막 프레임의 선이 프리뷰에 얼어붙어 살아있는 것처럼 보인다
         overlay.clear();
         const score = game.getScore();
-        el('final-score').textContent = `${score}점`;
-        el('submit-state').textContent = '점수를 보내는 중…';
+        const scoreNode = el('final-score');
+        scoreNode.firstChild.textContent = '0';
+        setStatus('점수를 보내는 중…', null);
         show(gameoverScreen);
+        countUp(scoreNode, score, 720);
+        // 애니메이션은 화면이 보인 뒤에 처음부터 다시 돌아야 한다
+        const bar = el('restart-bar');
+        bar.classList.remove('run');
+        void bar.offsetWidth;
+        bar.classList.add('run');
         try {
           await submitScore(nickname, score);
-          el('submit-state').textContent = '기록했습니다';
+          setStatus('기록했습니다', 'ok');
         } catch {
-          el('submit-state').textContent = '점수를 보내지 못했습니다';
+          setStatus('점수를 보내지 못했습니다', 'bad');
         }
         setTimeout(async () => {
           phase = 'start';
@@ -1196,8 +1809,21 @@
         }
 
         if (phase === 'countdown') {
+          game.renderIdle(window.innerWidth, window.innerHeight, nowMs);
           const left = Math.max(0, countdownEndMs - nowMs);
-          el('count').textContent = Math.ceil(left / 1000);
+          el('ring-track').style.setProperty('--p', (left / 5000).toFixed(4));
+          const secs = String(Math.ceil(left / 1000));
+          const countNode = el('count');
+          if (countNode.textContent !== secs) {
+            countNode.textContent = secs;
+            // 매 프레임이 아니라 숫자가 바뀔 때만 튄다. 이 화면의 유일한 연출이다
+            if (!reduceMotion.matches) {
+              countNode.animate(
+                [{ transform: 'scale(1.22)', opacity: 0.65 }, { transform: 'scale(1)', opacity: 1 }],
+                { duration: 420, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' }
+              );
+            }
+          }
           if (poseReady && landmarks) mapper.addCalibrationSample(landmarks);
           if (left <= 0) {
             if (poseReady && mapper.commitCalibration()) {
@@ -1215,7 +1841,10 @@
           return;
         }
 
-        if (phase !== 'playing') return;
+        if (phase !== 'playing') {
+          game.renderIdle(window.innerWidth, window.innerHeight, nowMs);
+          return;
+        }
 
         let signal;
         if (mode === 'pose') {
