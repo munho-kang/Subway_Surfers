@@ -792,6 +792,45 @@
         assert(jumps === 20, `점프 20회 중 ${jumps}회만 발화 — 기준선이 밀렸다`);
       });
 
+      check('속도 게이지는 상한 없이 단계를 올린다', () => {
+        // 예전엔 속도가 55에서 멈췄고, 그때 막대는 100%에 붙박여 거짓말을 했다.
+        // 이제 상한이 없으니 막대는 매 단계 다시 비어야 하고 단계는 물러서면 안 된다
+        const start = speedGauge(BASE_SPEED);
+        assert(start.level === 1 && start.fill === 0, '출발은 1단계 빈 막대여야 한다');
+        let prev = 0;
+        for (let sp = BASE_SPEED; sp <= BASE_SPEED + 40 * SPEED_STEP; sp += 0.25) {
+          const g = speedGauge(sp);
+          assert(g.fill >= 0 && g.fill < 1, `속도 ${sp} 에서 막대가 범위를 벗어났다`);
+          assert(g.level >= prev, `속도 ${sp} 에서 단계가 내려갔다`);
+          prev = g.level;
+        }
+        assert(prev === 41, `40단계를 더 올라 41단계여야 하는데 ${prev}단계에서 멈췄다`);
+      });
+
+      check('코인 줄은 화면을 메우되 다음 무리 앞에서 끊긴다', () => {
+        // 빈 구간을 코인으로 메우는 게 목적이지만, 마지막 코인을 먹고도 몸을 옮길
+        // 시간이 남아야 한다. 간격은 속도에 비례하므로 "간격의 몇 할"이 곧 일정한 시간이다
+        for (const gap of [BASE_GAP, 40, 60, MAX_GAP]) {
+          const rng = mulberry32(3);
+          for (let trial = 0; trial < 30; trial++) {
+            const objs = spawnGroup(rng, Z_SPAWN, gap);
+            const coins = objs.filter((o) => o.kind === 'coin');
+            if (coins.length === 0) continue;   // 빈 레인이 없으면 코인도 없다
+
+            const want = Math.ceil((gap * COIN_TRAIL) / COIN_SPACING);
+            assert(coins.length === want, `간격 ${gap} 에서 코인 ${coins.length}개 — ${want}개여야 한다`);
+
+            const last = Math.max(...coins.map((o) => o.z)) - Z_SPAWN;
+            assert(gap - last > gap * 0.35,
+              `간격 ${gap} 에서 마지막 코인이 다음 무리에 ${gap - last} 까지 붙었다`);
+
+            const trapped = coins.some((c) =>
+              objs.some((o) => o.kind !== 'coin' && o.lane === c.lane && o.z === c.z));
+            assert(!trapped, `간격 ${gap} 에서 코인이 장애물과 같은 자리에 놓였다`);
+          }
+        }
+      });
+
       return results;
     }
 
@@ -816,13 +855,28 @@
     const PERSPECTIVE_K = 0.06;   // 원근 강도
     const BASE_SPEED = 18;        // z/초
     const SPEED_GROWTH = 0.35;    // 초당 증가
-    const MAX_SPEED = 55;
+    const SPEED_STEP = 10;        // 이만큼 빨라질 때마다 속도 단계가 하나 오른다
+    // 속도에는 상한이 없지만 어두워짐에는 있어야 한다. 계속 어두워지면 보고 피할 수가 없다
+    const DARK_SPEED = 55;
     const BASE_GAP = 26;          // BASE_SPEED 기준 스폰 간격
+    // 간격 천장. 보이는 트랙(Z_SPAWN-Z_CHAR=97)보다 벌어지면 무리가 하나도 없는 순간이 생긴다
+    const MAX_GAP = 90;
+    const COIN_SPACING = 10;      // 코인 줄에서 코인 사이 거리
+    // 코인 줄이 간격의 몇 할까지 뻗는가. 남은 몫은 다음 무리를 읽고 몸을 옮기는 시간이다 —
+    // 간격은 속도에 비례하니 이 비율은 곧 일정한 시간이 된다(0.3~0.6초)
+    const COIN_TRAIL = 0.6;
     const LANE_SPREAD = 0.26;     // 화면폭 대비 레인 간격
     // InputMapper의 DEFAULT_CFG.animMs와 값을 맞춰야 한다 (위 "── InputMapper" 섹션)
     const JUMP_MS = 600;
     const COIN_VALUE = 10;
     const HORIZON_RATIO = 0.35;
+
+    // 속도에 상한이 없으니 막대 하나로는 표시할 수 없다. 한 단계를 채우면 다시 비우고,
+    // 몇 바퀴째인지는 단계 숫자가 말한다
+    function speedGauge(sp) {
+      const over = sp - BASE_SPEED;
+      return { level: Math.floor(over / SPEED_STEP) + 1, fill: (over % SPEED_STEP) / SPEED_STEP };
+    }
 
     // z가 클수록 멀고 작다. z=0 에서 scale=1
     function project(z, height) {
@@ -1001,7 +1055,7 @@
     // 게임은 항상 클리어 가능해야 한다.
     // 기둥을 최대 2개로 제한하면 최소 한 레인은 기둥이 아니게 되고,
     // 기둥 아닌 레인은 빈 레인이거나 점프/슬라이드로 통과 가능하다
-    function spawnGroup(rng, atZ) {
+    function spawnGroup(rng, atZ, gap) {
       const kinds = [null, null, null];
       const pillarCount = Math.floor(rng() * 3);   // 0, 1, 2
       const lanes = [0, 1, 2];
@@ -1023,11 +1077,15 @@
         if (kinds[l]) objects.push({ kind: kinds[l], lane: l, z: atZ, dead: false });
       }
 
-      // 코인은 완전히 빈 레인에만 둔다. 플레이어를 함정으로 유인하지 않는다
+      // 코인은 완전히 빈 레인에만 둔다. 플레이어를 함정으로 유인하지 않는다.
+      // 빨라질수록 무리 사이가 벌어져 트랙이 한산해진다 — 그 사이를 코인 줄로 메운다.
+      // 장애물을 촘촘히 놓아 메울 수는 없다. 몸으로 반응할 시간이 사라진다
       const emptyLanes = [0, 1, 2].filter((l) => !kinds[l]);
-      if (emptyLanes.length > 0 && rng() < 0.6) {
+      if (emptyLanes.length > 0) {
         const l = emptyLanes[Math.floor(rng() * emptyLanes.length)];
-        objects.push({ kind: 'coin', lane: l, z: atZ, dead: false });
+        for (let k = 0; k * COIN_SPACING < gap * COIN_TRAIL; k++) {
+          objects.push({ kind: 'coin', lane: l, z: atZ + k * COIN_SPACING, dead: false });
+        }
       }
       return objects;
     }
@@ -1068,7 +1126,7 @@
         if (dt <= 0) return;
 
         elapsed += dt;
-        speed = Math.min(BASE_SPEED + SPEED_GROWTH * elapsed, MAX_SPEED);
+        speed = BASE_SPEED + SPEED_GROWTH * elapsed;
         distance += speed * dt;
 
         lane = signal.lane;
@@ -1081,10 +1139,12 @@
 
         laneVisual += (lane - laneVisual) * Math.min(1, dt * 12);
 
-        // 속도가 오르면 간격도 벌려 반응 시간을 일정하게 유지한다
+        // 속도가 오르면 간격도 벌려 반응 시간을 지킨다. 단 MAX_GAP 까지다 —
+        // 그 위로 벌리면 반응 시간은 남지만 트랙이 텅 빈다
         zSinceSpawn += speed * dt;
-        if (zSinceSpawn >= BASE_GAP * (speed / BASE_SPEED)) {
-          objects.push(...spawnGroup(rng, Z_SPAWN));
+        const gap = Math.min(BASE_GAP * (speed / BASE_SPEED), MAX_GAP);
+        if (zSinceSpawn >= gap) {
+          objects.push(...spawnGroup(rng, Z_SPAWN, gap));
           zSinceSpawn = 0;
         }
 
@@ -1317,16 +1377,19 @@
         ctx.font = '600 16px system-ui, sans-serif';
         ctx.fillText('점', pad + scoreW + 7, pad + 40);
 
-        // 속도 게이지 — 얼마나 빨라졌는지가 곧 남은 난이도다
+        // 속도 게이지 — 막대는 한 단계분, 숫자는 몇 단계인지
         const barY = pad + 56;
-        const t = (speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED);
+        const gauge = speedGauge(speed);
         ctx.fillStyle = 'rgba(125, 214, 255, 0.16)';
         ctx.fillRect(pad, barY, 132, 3);
         ctx.fillStyle = C.cyan;
-        ctx.fillRect(pad, barY, 132 * Math.min(1, Math.max(0, t)), 3);
+        ctx.fillRect(pad, barY, 132 * gauge.fill, 3);
+
+        ctx.textBaseline = 'middle';
+        ctx.font = '600 14px system-ui, sans-serif';
+        ctx.fillText(`${gauge.level}단계`, pad + 142, barY + 2);
 
         // 코인 — 아이콘도 같은 금화다. 화면 안의 것과 같은 것임이 보여야 한다
-        ctx.textBaseline = 'middle';
         const cy = barY + 24;
         ctx.fillStyle = C.gold;
         ctx.beginPath();
@@ -1351,7 +1414,7 @@
         for (const o of [...objects].sort((a, b) => b.z - a.z)) drawObject(o, W, H);
         drawCharacter(W, H);
         // 빨라질수록 시야가 좁아진다. 점수판보다 먼저 칠해야 점수가 같이 어두워지지 않는다
-        const t = (speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED);
+        const t = (speed - BASE_SPEED) / (DARK_SPEED - BASE_SPEED);
         vignette(W, H, 0.55 + 0.45 * Math.min(1, Math.max(0, t)));
         drawHud(W, H);
       }
