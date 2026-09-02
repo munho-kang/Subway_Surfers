@@ -57,11 +57,23 @@
       width: 200px; border-radius: 12px; overflow: hidden; line-height: 0;
       border: 1px solid var(--edge);
       box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+      background: #05070f;
     }
-    /* 웹캠은 거울이 아니다. 프리뷰를 뒤집어야 사용자의 왼쪽과 화면의 왼쪽이 맞는다 */
-    #preview { display: block; width: 100%; opacity: 0.8; transform: scaleX(-1); }
-    /* 오버레이는 뒤집지 않는다. laneX = 1 - hip.x 가 이미 거울 좌표라 그대로 x 로 쓰면
-       맞고, 여기에 scaleX(-1) 을 걸면 선은 맞아도 글자가 뒤집힌다 */
+    /* 영상은 포즈 인식의 입력일 뿐 화면에는 내지 않는다. 자리는 차지해야 미리보기 크기가
+       영상 비율을 따라온다 (display:none 은 안 된다 — 크기가 0 이 된다) */
+    #preview { display: block; width: 100%; visibility: hidden; }
+    /* 준비 화면에서는 미리보기가 가운데로 나와 커진다. 2m 뒤에서도 선과 점이 읽혀야 한다.
+       .screen(z 3) 위에 올라와야 그 흐림 처리에 가려지지 않는다 */
+    #cam.align {
+      right: auto; bottom: auto; left: 50%; top: 50%;
+      transform: translate(-50%, -50%);
+      width: auto; z-index: 4;
+      border-color: var(--edge-strong);
+    }
+    /* 높이로 맞추고 폭은 비율을 따른다. 좁은 창에서는 max-width 가 비율을 지키며 줄인다 */
+    #cam.align #preview { width: auto; height: 62vh; max-width: 88vw; }
+    /* 오버레이가 곧 미리보기다. 졸라맨은 x 를 1 - x 로 그려 거울처럼 보인다 —
+       캔버스에 scaleX(-1) 을 걸면 글자까지 뒤집힌다 */
     #overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
 
     /* ── 디버그 패널 — 튜닝 도구다. 꾸미지 않고 읽히기만 하면 된다 */
@@ -232,12 +244,14 @@
     #ranking::-webkit-scrollbar-thumb { background: var(--edge); border-radius: 3px; }
     #ranking::-webkit-scrollbar-track { background: transparent; }
 
-    /* ── 카운트다운 — 이 화면이 이 게임의 순간이다. 링이 닫히는 동안 뒤로 물러난다 */
-    .countdown-panel {
-      display: flex; flex-direction: column; align-items: center; gap: 26px;
-      text-align: center;
+    /* ── 준비 화면 — 안내 문구는 위, 남은 시간은 아래. 가운데는 카메라(#cam.align)가 차지한다 */
+    #countdown { flex-direction: column; justify-content: space-between; }
+    .align-msg {
+      margin: 0; text-align: center;
+      font-size: clamp(17px, 2.6vh, 23px); font-weight: 600; color: #fff;
+      text-shadow: 0 0 12px rgba(77, 227, 255, 0.35);
     }
-    .ring { position: relative; display: grid; place-items: center; width: 224px; height: 224px; }
+    .ring { position: relative; display: grid; place-items: center; width: 116px; height: 116px; }
     .ring-track {
       position: absolute; inset: 0; border-radius: 50%;
       background: conic-gradient(
@@ -245,14 +259,14 @@
         var(--cyan) calc(var(--p, 1) * 360deg),
         rgba(125, 214, 255, 0.12) 0
       );
-      -webkit-mask: radial-gradient(circle, transparent 96px, #000 97px);
-              mask: radial-gradient(circle, transparent 96px, #000 97px);
+      -webkit-mask: radial-gradient(circle, transparent 50px, #000 51px);
+              mask: radial-gradient(circle, transparent 50px, #000 51px);
       filter: drop-shadow(0 0 14px rgba(77, 227, 255, 0.45));
     }
     #count {
       position: relative;
       font-family: var(--display); font-weight: 400;
-      font-size: 104px; line-height: 1; color: #fff;
+      font-size: 54px; line-height: 1; color: #fff;
       font-variant-numeric: tabular-nums;
       text-shadow: 0 0 10px rgba(77, 227, 255, 0.55), 0 0 44px rgba(77, 227, 255, 0.28);
     }
@@ -308,7 +322,8 @@
         <div class="start-main">
           <h1 class="title">포즈 러너</h1>
           <p class="lede">앉아서 닉네임을 넣고 시작을 누르세요.<br />
-             시작하면 5초 안에 1.5~2m 뒤로 물러나 전신이 보이게 서세요.</p>
+             시작하면 카메라 화면의 두 선에 눈과 골반을 맞춰 서세요.<br />
+             맞춘 채로 5초가 지나면 게임이 시작됩니다.</p>
           <div class="field">
             <input id="nickname" maxlength="12" placeholder="닉네임 (최대 12자)" aria-label="닉네임" />
             <button id="start-btn">시작</button>
@@ -329,13 +344,10 @@
     </div>
 
     <div id="countdown" class="screen hidden">
-      <div class="panel countdown-panel">
-        <p class="lede">뒤로 물러나 가만히 서세요</p>
-        <div class="ring">
-          <div class="ring-track" id="ring-track"></div>
-          <div id="count">5</div>
-        </div>
-        <p class="lede dim">이 자세를 기준으로 잡습니다</p>
+      <p id="align-msg" class="align-msg">눈과 골반을 선에 맞춰 서세요</p>
+      <div class="ring">
+        <div class="ring-track" id="ring-track"></div>
+        <div id="count">5</div>
       </div>
     </div>
 
@@ -397,6 +409,48 @@
       const eye = midpoint(lm[LM.EYE_L], lm[LM.EYE_R]);
       const torsoLen = Math.abs(shoulder.y - hip.y);
       return { shoulder, hip, eye, torsoLen };
+    }
+
+    // ── 자세 정렬 — 준비 화면에서 눈과 골반을 이 높이에 맞추게 한다.
+    // 눈 위로 22%, 골반 아래로 38% 가 남는 구도다. 점프로 머리가 뜨는 양(화면의 ~5%)과
+    // 쪼그려서 골반이 내려가는 양(~13%) 이 둘 다 화면 안에 머문다. 대략 무릎까지 보인다.
+    // 세 값은 계산으로 잡은 초기값이다 — 실제 카메라로 서 보고 조정한다
+    const ALIGN = { eyeY: 0.22, hipY: 0.62, tol: 0.05 };
+
+    // 눈·골반이 둘 다 선의 허용 오차 안이면 정렬이다. 아니면 사용자가 할 일 한 가지를 준다 —
+    // 거리부터, 그 다음 높이. 거리가 틀리면 높이는 맞춰봐야 소용없으니 먼저 본다.
+    // 간격이 맞는데 위아래로 치우쳤으면 몸이 아니라 카메라 각도 문제다
+    function alignCheck(m, a = ALIGN) {
+      const eyeOff = m.eye.y - a.eyeY;    // 양수면 선보다 아래
+      const hipOff = m.hip.y - a.hipY;
+      if (Math.abs(eyeOff) <= a.tol && Math.abs(hipOff) <= a.tol) return { aligned: true, hint: null };
+      const spanErr = hipOff - eyeOff;    // 눈-골반 간격 오차. 멀수록 작게 보이니 음수
+      if (spanErr < -a.tol) return { aligned: false, hint: '앞으로 오세요' };
+      if (spanErr > a.tol) return { aligned: false, hint: '뒤로 물러나세요' };
+      return { aligned: false, hint: eyeOff + hipOff < 0 ? '카메라를 위로 기울이세요' : '카메라를 아래로 기울이세요' };
+    }
+    // ── 졸라맨 — 카메라 영상 대신 관절만 그린다. 어떤 뼈를 그릴지는 여기서 정한다.
+    // 어깨와 골반은 좌우 중점 하나로 그린다 — 게임이 읽는 값도 그 중점이다.
+    // 랜드마크 배열 끝(33, 34)에 두 중점을 덧붙여 뼈 목록이 같은 방식으로 가리키게 한다
+    const SHO_MID = 33, HIP_MID = 34;
+    const BONES = [
+      [SHO_MID, HIP_MID],                                   // 척추
+      [SHO_MID, 13], [13, 15], [SHO_MID, 14], [14, 16],     // 팔
+      [HIP_MID, 25], [25, 27], [HIP_MID, 26], [26, 28],     // 다리
+      [27, 31], [28, 32],                                   // 발
+    ];
+    const JOINTS = [SHO_MID, 13, 14, 15, 16, 25, 26, 27, 28];   // 흰 점을 찍는 관절. 골반 중점은 색을 달리한다
+    // 화면 밖으로 나간 부위도 추정치는 나온다. 그건 그리지 않는다 —
+    // 앉아 있으면 다리가 사라져, 안 보인다는 사실이 그대로 보인다
+    const seen = (p) => (p.visibility ?? 1) >= 0.5;
+    // 중점은 두 점의 평균이라 한쪽이 안 보이면 그 평균도 믿을 수 없다. 약한 쪽을 따른다
+    function withMidpoints(lm) {
+      const mid = (a, b) =>
+        ({ ...midpoint(a, b), visibility: Math.min(a.visibility ?? 1, b.visibility ?? 1) });
+      return [...lm, mid(lm[LM.SHO_L], lm[LM.SHO_R]), mid(lm[LM.HIP_L], lm[LM.HIP_R])];
+    }
+    function visibleBones(pts) {
+      return BONES.filter(([a, b]) => seen(pts[a]) && seen(pts[b]));
     }
     // ── InputMapper — 랜드마크를 조작 신호로 바꾼다. 카메라도 게임도 모른다
     function createInputMapper(overrides = {}) {
@@ -829,6 +883,51 @@
             assert(!trapped, `간격 ${gap} 에서 코인이 장애물과 같은 자리에 놓였다`);
           }
         }
+      });
+
+      // 정렬 판정은 준비 화면이 눈·골반 선에 몸을 맞추게 하는 규칙이다.
+      // 선 위치는 실측으로 바뀔 수 있으니 임계처럼 못박고 관계만 검증한다
+      const TEST_ALIGN = { eyeY: 0.22, hipY: 0.62, tol: 0.05 };
+      const alignedAt = (eyeY, hipY) =>
+        alignCheck(poseMetrics(makePose({ eyeY, hipY, shoulderY: (eyeY + hipY) / 2 })), TEST_ALIGN);
+
+      check('눈과 골반이 둘 다 선 근처일 때만 정렬로 본다', () => {
+        assert(alignedAt(0.22, 0.62).aligned, '정확히 선 위인데 정렬이 아니다');
+        assert(alignedAt(0.26, 0.58).aligned, '허용 오차 안(0.04)인데 정렬이 아니다');
+        assert(!alignedAt(0.22, 0.70).aligned, '골반만 0.08 벗어났는데 정렬로 봤다');
+        assert(!alignedAt(0.10, 0.62).aligned, '눈만 0.12 벗어났는데 정렬로 봤다');
+      });
+
+      check('정렬이 안 되면 거리를 먼저, 그 다음 카메라 높이를 고치라고 한다', () => {
+        // 눈-골반 간격이 목표 0.40 보다 좁으면 멀리 있는 것이고, 넓으면 가까운 것이다.
+        // 간격이 맞는데 위아래로 치우쳤으면 몸이 아니라 카메라 각도 문제다
+        assert(alignedAt(0.30, 0.54).hint === '앞으로 오세요', `간격 0.24 인데 힌트가 ${alignedAt(0.30, 0.54).hint}`);
+        assert(alignedAt(0.12, 0.72).hint === '뒤로 물러나세요', `간격 0.60 인데 힌트가 ${alignedAt(0.12, 0.72).hint}`);
+        assert(alignedAt(0.05, 0.45).hint === '카메라를 위로 기울이세요', `몸이 위로 치우쳤는데 힌트가 ${alignedAt(0.05, 0.45).hint}`);
+        assert(alignedAt(0.40, 0.80).hint === '카메라를 아래로 기울이세요', `몸이 아래로 치우쳤는데 힌트가 ${alignedAt(0.40, 0.80).hint}`);
+        assert(alignedAt(0.22, 0.62).hint === null, '정렬됐는데 힌트가 남았다');
+      });
+
+      check('졸라맨은 화면에 보이는 뼈만 그린다', () => {
+        assert(visibleBones(withMidpoints(makePose())).length === BONES.length, '전부 보이는데 뼈가 빠졌다');
+        // 앉아 있으면 무릎 아래는 화면 밖이라 추정치뿐이다. 그 뼈는 그리지 않는다
+        const seated = makePose();
+        for (let i = 25; i <= 32; i++) seated[i].visibility = 0.1;
+        const bones = visibleBones(withMidpoints(seated));
+        assert(bones.every(([a, b]) => !(a >= 25 && a <= 32) && !(b >= 25 && b <= 32)), '안 보이는 다리 뼈가 남았다');
+        assert(bones.length === BONES.length - 6,
+          `다리·발 뼈 6개가 빠져야 하는데 ${BONES.length - bones.length}개 빠졌다`);
+      });
+
+      check('어깨·골반 중점은 한쪽이라도 안 보이면 안 보이는 것으로 친다', () => {
+        // 중점은 두 점의 평균이라, 한쪽이 화면 밖이면 그 평균도 믿을 수 없다
+        const half = makePose();
+        half[LM.HIP_R].visibility = 0.1;
+        const pts = withMidpoints(half);
+        assert(seen(pts[SHO_MID]), '어깨는 둘 다 보이는데 중점이 안 보인다고 한다');
+        assert(!seen(pts[HIP_MID]), '오른쪽 골반이 안 보이는데 골반 중점을 보이는 것으로 쳤다');
+        const bones = visibleBones(pts);
+        assert(bones.every(([a, b]) => a !== HIP_MID && b !== HIP_MID), '골반 중점에 붙은 뼈가 남았다');
       });
 
       return results;
@@ -1606,12 +1705,12 @@
 
       // 두 가로선이 붙어 있으면 라벨이 겹친다. 문턱 간격은 slideRelease 와 몸통 길이에
       // 따라 얼마든지 좁아지므로, 겹칠 수 있는 짝은 라벨을 반대쪽 끝에 둔다
-      function hline(yNorm, color, label, dash = [], side = 'left') {
+      function hline(yNorm, color, label, dash = [], side = 'left', width = 1.5) {
         const y = yNorm * h;
         ctx.save();
         ctx.setLineDash(dash);
         ctx.strokeStyle = color;
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = width;
         ctx.beginPath();
         ctx.moveTo(0, y);
         ctx.lineTo(w, y);
@@ -1637,13 +1736,111 @@
         ctx.restore();
       }
 
+      // 큰 미리보기 위의 라벨. 천장·벽 같은 밝은 배경 위에서도 읽히게 어두운 바탕을 깐다
+      function tag(text, yNorm, color) {
+        ctx.save();
+        ctx.font = 'bold 15px system-ui, sans-serif';
+        ctx.textBaseline = 'middle';
+        const pad = 6, th = 22;
+        const tw = ctx.measureText(text).width;
+        const y = yNorm * h - th - 4;
+        ctx.fillStyle = 'rgba(5, 7, 15, 0.75)';
+        ctx.fillRect(8, y, tw + pad * 2, th);
+        ctx.fillStyle = color;
+        ctx.fillText(text, 8 + pad, y + th / 2);
+        ctx.restore();
+      }
+
       function clear() {
         if (w) ctx.clearRect(0, 0, w, h);
       }
 
-      function draw(d) {
+      // 준비 화면의 정렬 안내 — 눈·골반 목표선과 허용 띠
+      function guide(color) {
+        ctx.save();
+        ctx.globalAlpha = 0.18;
+        ctx.fillStyle = color;
+        ctx.fillRect(0, (ALIGN.eyeY - ALIGN.tol) * h, w, 2 * ALIGN.tol * h);
+        ctx.fillRect(0, (ALIGN.hipY - ALIGN.tol) * h, w, 2 * ALIGN.tol * h);
+        ctx.restore();
+        hline(ALIGN.eyeY, color, null, [], 'left', 2.5);
+        hline(ALIGN.hipY, color, null, [], 'left', 2.5);
+        tag('눈', ALIGN.eyeY, color);
+        tag('골반', ALIGN.hipY, color);
+      }
+
+      // 졸라맨. 미리보기는 거울이어야 하니(사용자의 왼쪽 = 화면의 왼쪽) x 는 1 - x 로 그린다
+      function skeleton(lm, accent) {
+        const pts = withMidpoints(lm);
+        const px = (p) => [(1 - p.x) * w, p.y * h];
+        const r = Math.max(2.5, w * 0.007);
+        ctx.save();
+        ctx.strokeStyle = '#e8eeff';
+        ctx.lineWidth = Math.max(1.5, w * 0.005);
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        for (const [a, b] of visibleBones(pts)) {
+          ctx.moveTo(...px(pts[a]));
+          ctx.lineTo(...px(pts[b]));
+        }
+        // 머리 — 귀 사이 중점에 동그라미, 어깨 중점에서 올라가는 목선
+        if ([7, 8, SHO_MID].every((i) => seen(pts[i]))) {
+          const [lx, ly] = px(pts[7]), [rx, ry] = px(pts[8]);
+          const hx = (lx + rx) / 2, hy = (ly + ry) / 2;
+          const hr = Math.max(r * 2, Math.hypot(rx - lx, ry - ly) * 0.7);
+          const [sx, sy] = px(pts[SHO_MID]);
+          ctx.moveTo(sx, sy);
+          ctx.lineTo(hx, hy + hr);
+          ctx.moveTo(hx + hr, hy);
+          ctx.arc(hx, hy, hr, 0, Math.PI * 2);
+        }
+        ctx.stroke();
+        ctx.fillStyle = '#e8eeff';
+        for (const i of JOINTS) {
+          if (!seen(pts[i])) continue;
+          const [x, y] = px(pts[i]);
+          ctx.beginPath();
+          ctx.arc(x, y, r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        // 눈과 골반은 정렬 기준이라 색을 달리한다. 화면 밖이어도 그린다 — 게임이 믿는 값이 그것이다.
+        // 둘 다 판정이 쓰는 값 그대로 좌우 중점 하나로 찍는다
+        ctx.fillStyle = accent;
+        for (const p of [midpoint(pts[LM.EYE_L], pts[LM.EYE_R]), pts[HIP_MID]]) {
+          const [x, y] = px(p);
+          ctx.beginPath();
+          ctx.arc(x, y, r * 1.4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+      }
+
+      function searching() {
+        ctx.save();
+        ctx.fillStyle = 'rgba(232, 238, 255, 0.45)';
+        ctx.font = `${Math.min(18, Math.max(11, w * 0.05))}px system-ui, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('몸을 찾는 중…', w / 2, h / 2);
+        ctx.restore();
+      }
+
+      // 매 프레임 미리보기 전체를 다시 그린다 — 검은 배경, (준비 화면이면) 정렬 안내,
+      // (디버그면) 판정 기준선, 맨 위에 졸라맨. 눈·골반 점은 준비 화면에서는 정렬 상태색,
+      // 그 밖에는 하늘색이다
+      function render(lm, { aligned, thresholds: d } = {}) {
         if (!w && !fit()) return;
-        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = '#05070f';
+        ctx.fillRect(0, 0, w, h);
+        const accent = aligned == null ? '#6cc5ff' : aligned ? '#7ef6a0' : '#ffd166';
+        if (aligned != null) guide(accent);
+        if (d) thresholds(d);
+        if (lm) skeleton(lm, accent);
+        else searching();
+      }
+
+      // 판정 기준선 — 튜닝 도구. 디버그 패널이 열려 있을 때만 그린다
+      function thresholds(d) {
         // 캘리브레이션 전이거나 몸을 못 찾은 프레임 — 그릴 기준선이 없다
         if (d.torsoLen == null) return;
         ctx.font = '10px ui-monospace, Menlo, monospace';
@@ -1669,7 +1866,7 @@
       // 창 크기가 바뀌면 dpr 이 달라질 수 있다. 다음 draw 에서 다시 잡게 한다
       function invalidate() { w = 0; }
 
-      return { draw, clear, invalidate };
+      return { render, clear, invalidate };
     }
     // ── 화면 전환·API·부트
     const canvas = document.getElementById('canvas');
@@ -1739,7 +1936,13 @@
       let mode = 'keyboard';
       let poseReady = false;   // 세션 동안 카메라 파이프라인이 살아있는지. mode 는 라운드마다 결정된다
       let phase = 'start';
-      let countdownEndMs = 0;
+      // 준비 화면 — 자세가 선에 맞은 채로 흐른 시간이 ALIGN_HOLD_MS 를 채우면 시작한다.
+      // 그래도 ALIGN_MAX_MS 안에 못 맞추면 그냥 시작한다 (맞춘 적이 있으면 그 자세로, 없으면 키보드)
+      const ALIGN_HOLD_MS = 5000;
+      const ALIGN_MAX_MS = 15000;
+      let alignedMs = 0;
+      let lastTickMs = 0;
+      let countdownDeadlineMs = 0;
       let nickname = '플레이어';
 
       // show(null) 이면 셋 다 숨는다 — 플레이 중에는 화면 오버레이가 없다
@@ -1797,7 +2000,12 @@
       el('start-btn').addEventListener('click', () => {
         nickname = el('nickname').value.trim().slice(0, 12) || '플레이어';
         phase = 'countdown';
-        countdownEndMs = performance.now() + 5000;
+        alignedMs = 0;
+        lastTickMs = performance.now();
+        countdownDeadlineMs = performance.now() + ALIGN_MAX_MS;
+        // 카메라가 아직 안 떴어도 미리 붙인다. 뜨는 순간 바로 큰 화면으로 나온다
+        cam.classList.add('align');
+        overlay.invalidate();
         show(countdownScreen);
       });
 
@@ -1828,9 +2036,6 @@
 
       async function finishGame() {
         phase = 'gameover';
-        // 여기서 지우지 않으면 루프가 'playing' 이 아니라 일찍 빠져나가는 동안
-        // 마지막 프레임의 선이 프리뷰에 얼어붙어 살아있는 것처럼 보인다
-        overlay.clear();
         const score = game.getScore();
         const scoreNode = el('final-score');
         scoreNode.firstChild.textContent = '0';
@@ -1873,8 +2078,25 @@
 
         if (phase === 'countdown') {
           game.renderIdle(window.innerWidth, window.innerHeight, nowMs);
-          const left = Math.max(0, countdownEndMs - nowMs);
-          el('ring-track').style.setProperty('--p', (left / 5000).toFixed(4));
+          // 자세가 선에 맞은 동안만 시간이 흐르고 기준 자세가 쌓인다. 뒤로 걸어가는 도중의
+          // 자세가 기준에 섞이지 않는다. 카메라가 없으면 맞출 것이 없으니 그냥 흐른다
+          const m = landmarks ? poseMetrics(landmarks) : null;
+          const check = m && m.torsoLen > 1e-6
+            ? alignCheck(m)
+            : { aligned: false, hint: '카메라에 몸이 보이게 서세요' };
+          const dt = Math.min(100, nowMs - lastTickMs);   // 탭이 가려졌다 돌아와도 한 번에 채우지 않는다
+          lastTickMs = nowMs;
+          if (!poseReady || check.aligned) alignedMs += dt;
+          if (poseReady && check.aligned) mapper.addCalibrationSample(landmarks);
+          if (poseReady) overlay.render(landmarks, { aligned: check.aligned });
+
+          const msg = !poseReady ? '카메라가 없어 화살표 키로 시작합니다'
+            : check.aligned ? '좋아요, 그대로 계세요' : check.hint;
+          const msgNode = el('align-msg');
+          if (msgNode.textContent !== msg) msgNode.textContent = msg;
+
+          const left = Math.max(0, ALIGN_HOLD_MS - alignedMs);
+          el('ring-track').style.setProperty('--p', (left / ALIGN_HOLD_MS).toFixed(4));
           const secs = String(Math.ceil(left / 1000));
           const countNode = el('count');
           if (countNode.textContent !== secs) {
@@ -1887,14 +2109,17 @@
               );
             }
           }
-          if (poseReady && landmarks) mapper.addCalibrationSample(landmarks);
-          if (left <= 0) {
+          if (left <= 0 || nowMs >= countdownDeadlineMs) {
+            // 큰 화면에 그린 선이 구석 썸네일에 축소돼 남지 않도록 지우고 나서 줄인다
+            overlay.clear();
+            cam.classList.remove('align');
+            overlay.invalidate();
             if (poseReady && mapper.commitCalibration()) {
               mode = 'pose';
             } else {
-              // 5초 동안 몸을 한 번도 못 찾았다. 이번 라운드는 포즈 조작이 불가능하다
+              // 제한 시간 안에 자세를 한 번도 못 맞췄다. 이번 라운드는 포즈 조작이 불가능하다
               mode = 'keyboard';
-              if (poseReady) showToast('몸을 찾지 못했습니다. 화살표 키로 조작하세요');
+              if (poseReady) showToast('자세를 맞추지 못했습니다. 화살표 키로 조작하세요');
             }
             phase = 'playing';
             show(null);
@@ -1906,6 +2131,8 @@
 
         if (phase !== 'playing') {
           game.renderIdle(window.innerWidth, window.innerHeight, nowMs);
+          // 시작 화면에서도 졸라맨이 따라 움직여야 카메라가 살아있다는 것을 안다
+          if (poseReady) overlay.render(landmarks);
           return;
         }
 
@@ -1917,9 +2144,12 @@
           signal = keyboard.read();
         }
         panel.update(mapper.getDebug(), signal.lane, mode);
-        // 오버레이는 튜닝 도구다. 디버그 패널과 토글을 공유한다 (D 키)
-        if (panel.isVisible() && mode === 'pose') overlay.draw(mapper.getDebug());
-        else overlay.clear();
+        // 판정 기준선은 튜닝 도구다. 디버그 패널과 토글을 공유한다 (D 키)
+        if (poseReady) {
+          overlay.render(landmarks, {
+            thresholds: panel.isVisible() && mode === 'pose' ? mapper.getDebug() : null,
+          });
+        }
 
         game.step(signal, nowMs);
         game.render(window.innerWidth, window.innerHeight);
