@@ -1382,6 +1382,27 @@
         return t;
       })();
 
+      // 빔 앞면의 아래 화살표 ▼. 바리케이드 줄무늬가 '넘어라' 이듯 이것은 '숙여라' 다
+      const chevrons = (() => {
+        const c = document.createElement('canvas');
+        c.width = 256;
+        c.height = 64;
+        const g = c.getContext('2d');
+        g.fillStyle = '#0b2f4a';
+        g.fillRect(0, 0, 256, 64);
+        g.fillStyle = C.cyan;
+        for (let i = 0; i < 5; i++) {
+          const x = (i + 0.5) * (256 / 5);
+          g.beginPath();
+          g.moveTo(x - 16, 14); g.lineTo(x + 16, 14); g.lineTo(x, 48);
+          g.closePath();
+          g.fill();
+        }
+        const t = new THREE.CanvasTexture(c);
+        t.colorSpace = THREE.SRGBColorSpace;
+        return t;
+      })();
+
       const shadowGeo = new THREE.CircleGeometry(1, 24);
       const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.4, depthWrite: false });
       const M = {
@@ -1389,7 +1410,7 @@
         stripes: new THREE.MeshStandardMaterial({ map: stripes, emissiveMap: stripes, emissive: 0xffffff, emissiveIntensity: 0.45 }),
         emberTop: new THREE.MeshBasicMaterial({ color: C.emberLight }),
         beam: lit('#0f4a6e', 0.15),
-        beamPost: lit('#0f2a44'),
+        chevrons: new THREE.MeshStandardMaterial({ map: chevrons, emissiveMap: chevrons, emissive: 0xffffff, emissiveIntensity: 0.6 }),
         cyan: new THREE.MeshBasicMaterial({ color: C.cyan }),
         pillar: lit(C.violetDark, 0.35),
         violet: glowLine(C.violet),
@@ -1429,15 +1450,20 @@
           g.add(shadow(1.1, 0.4), box(M.stripes, 1.7, 1.1, 0.35, 0, 0.55), box(M.emberTop, 1.72, 0.06, 0.37, 0, 1.13));
           return g;
         },
-        // 아래 끝 1.2 — 선 키(1.8)보다 낮고 슬라이드 높이(약 0.7)보다 높다. 그 틈을 청록으로 밝힌다
+        // 아래 끝 1.2 — 선 키(1.8)보다 낮고 슬라이드 높이(약 0.7)보다 높다.
+        // '밑으로 지나가는 문' 으로 읽혀야 한다: 얇은 막대(가슴 높이), 빛나는 기둥이 틈을 감싸고,
+        // 앞뒤 면에만 ▼ 를 새긴다(윗면까지 새기면 위에서 내려다볼 때 어지럽다)
         beam() {
           const g = new THREE.Group();
+          const bar = new THREE.Mesh(unitBox, [M.beam, M.beam, M.beam, M.beam, M.chevrons, M.chevrons]);
+          bar.scale.set(1.7, 0.4, 0.3);
+          bar.position.y = 1.2 + 0.2;
           g.add(
             shadow(1.0, 0.3),
-            box(M.beam, 1.7, 0.75, 0.3, 0, 1.2 + 0.375),
+            bar,
             box(M.cyan, 1.7, 0.08, 0.32, 0, 1.24),
-            box(M.beamPost, 0.08, 1.95, 0.08, -0.85, 0.975),
-            box(M.beamPost, 0.08, 1.95, 0.08, 0.85, 0.975),
+            box(M.cyan, 0.12, 1.6, 0.12, -0.85, 0.8),
+            box(M.cyan, 0.12, 1.6, 0.12, 0.85, 0.8),
           );
           return g;
         },
