@@ -10,6 +10,15 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&display=swap" rel="stylesheet" />
+  <!-- 3D 엔진. 모듈 스크립트가 boot() 안에서 필요할 때 부른다 — ?test=1 은 부르지 않는다 -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"
+      }
+    }
+  </script>
   <style>
     /* ── 세계관 토큰 — 밤의 터널: 깊은 남색 바탕, 보랏빛 지평선, 청록 네온.
        캔버스도 같은 값을 쓴다 (아래 "── 팔레트" 섹션과 짝을 맞춘다) */
@@ -49,6 +58,8 @@
 
     #stage { position: relative; width: 100vw; height: 100dvh; }
     #canvas { display: block; width: 100%; height: 100%; }
+    /* 3D 캔버스 위에 얹는 투명 층. 점수판과 비네트만 그린다. 클릭은 아래로 통과시킨다 */
+    #hud { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 
     /* ── 카메라 미리보기 */
     #cam {
@@ -309,6 +320,7 @@
 <body>
   <div id="stage">
     <canvas id="canvas"></canvas>
+    <canvas id="hud"></canvas>
     <div id="cam" class="hidden">
       <video id="preview" playsinline muted></video>
       <canvas id="overlay"></canvas>
@@ -971,11 +983,10 @@
           <ul style="list-style:none;padding:0">${rows}</ul>
         </div>`;
     }
-    // ── Game — 조작 신호만 받아 상태를 굴리고 그린다. 포즈의 존재를 모른다
+    // ── Game — 조작 신호만 받아 상태를 굴린다. 그리기는 아래 3D 렌더러가 한다. 포즈의 존재를 모른다
     const Z_SPAWN = 100;          // 소실점 z
     const Z_CHAR = 3;             // 캐릭터 z
     const Z_DESPAWN = -5;
-    const PERSPECTIVE_K = 0.06;   // 원근 강도
     const BASE_SPEED = 18;        // z/초
     const SPEED_GROWTH = 0.35;    // 초당 증가
     const SPEED_STEP = 10;        // 이만큼 빨라질 때마다 속도 단계가 하나 오른다
@@ -988,28 +999,15 @@
     // 코인 줄이 간격의 몇 할까지 뻗는가. 남은 몫은 다음 무리를 읽고 몸을 옮기는 시간이다 —
     // 간격은 속도에 비례하니 이 비율은 곧 일정한 시간이 된다(0.3~0.6초)
     const COIN_TRAIL = 0.6;
-    const LANE_SPREAD = 0.26;     // 화면폭 대비 레인 간격
     // InputMapper의 DEFAULT_CFG.animMs와 값을 맞춰야 한다 (위 "── InputMapper" 섹션)
     const JUMP_MS = 600;
     const COIN_VALUE = 10;
-    const HORIZON_RATIO = 0.35;
 
     // 속도에 상한이 없으니 막대 하나로는 표시할 수 없다. 한 단계를 채우면 다시 비우고,
     // 몇 바퀴째인지는 단계 숫자가 말한다
     function speedGauge(sp) {
       const over = sp - BASE_SPEED;
       return { level: Math.floor(over / SPEED_STEP) + 1, fill: (over % SPEED_STEP) / SPEED_STEP };
-    }
-
-    // z가 클수록 멀고 작다. z=0 에서 scale=1
-    function project(z, height) {
-      const scale = 1 / (1 + z * PERSPECTIVE_K);
-      const horizonY = height * HORIZON_RATIO;
-      return { y: horizonY + (height - horizonY) * scale, scale, horizonY };
-    }
-
-    function laneScreenX(laneFloat, scale, width) {
-      return width / 2 + (laneFloat - 1) * LANE_SPREAD * width * scale;
     }
 
     // ── 팔레트 — 위 CSS :root 와 같은 값이다. 한쪽만 바꾸면 화면이 갈라진다
@@ -1023,140 +1021,6 @@
       violet: '#b06dff', violetDark: '#3b1a6b', violetLight: '#d8b4ff',
     };
     const DISPLAY_FONT = "'Black Han Sans', 'Apple SD Gothic Neo', system-ui, sans-serif";
-    // 그림만 키우는 배율. project() 도 충돌 판정도 건드리지 않는다 —
-    // 원근이 맞아도 실물이 작으면 뭘 피하는지가 안 보인다
-    const WORLD_SCALE = 2.3;
-
-    // 지평선 위가 화면의 3분의 1이다. 비워두면 그만큼이 죽는다.
-    // 실루엣은 한 번만 만들고 스크롤만 시킨다
-    const SKYLINE = (() => {
-      const rng = mulberry32(7);
-      const out = [];
-      for (let x = 0; x < 1; ) {
-        const w = 0.028 + rng() * 0.05;
-        out.push({ x, w, h: 0.22 + rng() * 0.78 });
-        x += w + rng() * 0.018;
-      }
-      return out;
-    })();
-
-    // 그라디언트는 크기가 바뀔 때만 다시 만든다. 매 프레임 만들면 그냥 낭비다
-    let gcache = { key: '' };
-    function grads(ctx, W, H) {
-      const key = `${W}x${H}`;
-      if (gcache.key === key) return gcache;
-      const hy = H * HORIZON_RATIO;
-
-      const sky = ctx.createLinearGradient(0, 0, 0, hy);
-      sky.addColorStop(0, C.skyTop);
-      sky.addColorStop(0.55, C.skyMid);
-      sky.addColorStop(1, C.skyHorizon);
-
-      const ground = ctx.createLinearGradient(0, hy, 0, H);
-      ground.addColorStop(0, C.groundFar);
-      ground.addColorStop(0.35, C.groundMid);
-      ground.addColorStop(1, C.groundNear);
-
-      // 지평선의 빛무리 — 도시가 뒤에서 타고 있다
-      const haze = ctx.createLinearGradient(0, hy - H * 0.15, 0, hy + H * 0.05);
-      haze.addColorStop(0, 'rgba(140, 90, 255, 0)');
-      haze.addColorStop(0.7, 'rgba(140, 90, 255, 0.22)');
-      haze.addColorStop(0.88, 'rgba(120, 220, 255, 0.30)');
-      haze.addColorStop(1, 'rgba(120, 220, 255, 0)');
-
-      // 레인 라인 — 아래는 진하고 지평선에서 사라진다
-      const fade = (rgb, a) => {
-        const g = ctx.createLinearGradient(0, H, 0, hy);
-        g.addColorStop(0, `rgba(${rgb}, ${a})`);
-        g.addColorStop(0.5, `rgba(${rgb}, ${a * 0.85})`);
-        g.addColorStop(1, `rgba(${rgb}, 0)`);
-        return g;
-      };
-      const laneGlow = fade('77, 227, 255', 0.22);
-      const laneCore = fade('165, 243, 255', 0.95);
-
-      const vignette = ctx.createRadialGradient(
-        W / 2, H * 0.56, Math.min(W, H) * 0.28,
-        W / 2, H * 0.56, Math.max(W, H) * 0.78
-      );
-      vignette.addColorStop(0, 'rgba(3, 5, 14, 0)');
-      vignette.addColorStop(1, 'rgba(3, 5, 14, 0.75)');
-
-      gcache = { key, sky, ground, haze, laneGlow, laneCore, vignette };
-      return gcache;
-    }
-
-    // 배경 전부 — 하늘, 스카이라인, 바닥, 흐르는 격자, 레인 라인.
-    // scroll 은 z 단위의 이동 거리다. 격자가 이만큼 다가온다
-    function drawWorld(ctx, W, H, scroll) {
-      const g = grads(ctx, W, H);
-      const hy = H * HORIZON_RATIO;
-
-      ctx.fillStyle = g.sky;
-      ctx.fillRect(0, 0, W, hy);
-
-      // 스카이라인은 아주 느리게 흐른다. 멀리 있는 것은 천천히 지나간다
-      const shift = (scroll * 0.0009) % 1;
-      ctx.fillStyle = '#0c0722';
-      for (const b of SKYLINE) {
-        const bx = (((b.x - shift) % 1) + 1) % 1;
-        const bw = b.w * W;
-        const bh = b.h * hy * 0.62;
-        ctx.fillRect(bx * W, hy - bh, bw, bh);
-        if (bx * W + bw > W) ctx.fillRect(bx * W - W, hy - bh, bw, bh);
-      }
-
-      ctx.fillStyle = g.haze;
-      ctx.fillRect(0, hy - H * 0.15, W, H * 0.2);
-
-      ctx.fillStyle = g.ground;
-      ctx.fillRect(0, hy, W, H - hy);
-
-      // 소실점. 멀어질수록 scale 이 0 으로 가므로 모든 레인이 여기서 만난다
-      const near = project(0, H);
-      const vx = W / 2;
-
-      // 달리는 면 — 바깥 두 라인 사이를 살짝 밝혀 트랙이 '바닥'이 아니라 '길'로 읽히게 한다
-      ctx.fillStyle = 'rgba(77, 227, 255, 0.055)';
-      ctx.beginPath();
-      ctx.moveTo(laneScreenX(-0.5, near.scale, W), near.y);
-      ctx.lineTo(laneScreenX(2.5, near.scale, W), near.y);
-      ctx.lineTo(vx, hy);
-      ctx.closePath();
-      ctx.fill();
-
-      // 가로 격자 — 세계가 실제로 흐르고 있다는 유일한 증거다.
-      // 선은 세계 좌표에 고정돼 있고 카메라가 다가간다
-      const SPACING = 7;
-      ctx.lineWidth = 1;
-      for (let z = SPACING - (scroll % SPACING); z < Z_SPAWN; z += SPACING) {
-        const p = project(z, H);
-        ctx.strokeStyle = `rgba(125, 214, 255, ${(0.34 * p.scale).toFixed(3)})`;
-        ctx.beginPath();
-        ctx.moveTo(laneScreenX(-2.4, p.scale, W), p.y);
-        ctx.lineTo(laneScreenX(4.4, p.scale, W), p.y);
-        ctx.stroke();
-      }
-
-      // 레인 라인 — 넓고 흐린 선 위에 좁고 밝은 선을 겹쳐 발광을 흉내낸다.
-      // shadowBlur 는 프레임을 잡아먹는다. 포즈 추적이 이미 무겁다
-      ctx.lineCap = 'butt';
-      for (const edge of [-0.5, 0.5, 1.5, 2.5]) {
-        const outer = edge === -0.5 || edge === 2.5;
-        ctx.globalAlpha = outer ? 1 : 0.3;
-        ctx.beginPath();
-        ctx.moveTo(laneScreenX(edge, near.scale, W), near.y);
-        ctx.lineTo(vx, hy);
-        ctx.strokeStyle = g.laneGlow;
-        ctx.lineWidth = outer ? 11 : 6;
-        ctx.stroke();
-        ctx.strokeStyle = g.laneCore;
-        ctx.lineWidth = outer ? 2.4 : 1.4;
-        ctx.stroke();
-      }
-      ctx.globalAlpha = 1;
-    }
-
     // 게임 물체와 3D 메시를 1:1 로 짝짓는다. 새 물체는 풀에서 메시를 받고, 사라진 물체의 메시는
     // 풀로 돌아간다. 프레임마다 메시를 새로 만들면 몇 분 뒤 GPU 메모리가 샌다
     function syncMeshes(map, objects, acquire, release) {
@@ -1226,8 +1090,7 @@
       return objects;
     }
 
-    function createGame(canvas) {
-      const ctx = canvas.getContext('2d');
+    function createGame() {
       let state = 'idle';
       let lane = 1;
       let laneVisual = 1;
@@ -1301,269 +1164,222 @@
         objects = objects.filter((o) => !o.dead && o.z > Z_DESPAWN);
       }
 
-      // 바닥 그림자 — 물체가 얼마나 가까운지 알려주는 가장 싼 단서다.
-      // 한 겹이면 가장자리가 칼로 자른 것처럼 보인다. 두 겹으로 번지게 한다
-      function groundShadow(x, y, halfW, s, alpha) {
-        const ry = Math.max(1, 7 * s);
-        ctx.fillStyle = `rgba(0, 0, 0, ${(alpha * 0.45).toFixed(3)})`;
-        ctx.beginPath();
-        ctx.ellipse(x, y, halfW * 1.35, ry * 1.5, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = `rgba(0, 0, 0, ${(alpha * 0.7).toFixed(3)})`;
-        ctx.beginPath();
-        ctx.ellipse(x, y, halfW, ry, 0, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      function drawObject(o, W, H) {
-        const p = project(o.z, H);
-        if (p.scale <= 0.02) return;
-        const x = laneScreenX(o.lane, p.scale, W);
-        const w = LANE_SPREAD * W * p.scale * 0.7;
-        const vs = p.scale * WORLD_SCALE;             // 세로 치수용 배율
-        const px = (n) => Math.max(1, n * vs);        // 멀어져도 획이 사라지지 않게
-
-        if (o.kind === 'coin') {
-          const cy = p.y - 62 * vs;
-          const r = 15 * vs;
-          // 돌아가는 금화 — 폭만 줄였다 늘렸다 하면 회전으로 읽힌다
-          const spin = 0.16 + 0.84 * Math.abs(Math.cos(nowMs / 320 + o.lane * 1.7));
-          ctx.fillStyle = 'rgba(255, 211, 77, 0.2)';
-          ctx.beginPath();
-          ctx.arc(x, cy, r * 1.9, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.fillStyle = C.gold;
-          ctx.beginPath();
-          ctx.ellipse(x, cy, r * spin, r, 0, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.fillStyle = C.goldLight;
-          ctx.beginPath();
-          ctx.ellipse(x, cy, r * spin * 0.5, r * 0.5, 0, 0, Math.PI * 2);
-          ctx.fill();
-          return;
-        }
-
-        if (o.kind === 'barricade') {
-          const h = 44 * vs;   // 러너 가슴 높이. 이만하면 '뛰어넘어야 한다' 로 읽힌다
-          const top = p.y - h;
-          groundShadow(x, p.y, w * 0.55, vs, 0.4);
-          ctx.fillStyle = C.emberDark;
-          ctx.fillRect(x - w / 2, top, w, h);
-          // 경고 줄무늬 — 몸통 안으로만 자른다
-          ctx.save();
-          ctx.beginPath();
-          ctx.rect(x - w / 2, top, w, h);
-          ctx.clip();
-          ctx.fillStyle = C.ember;
-          const sw = Math.max(4, 13 * p.scale);
-          for (let sx = x - w / 2 - h; sx < x + w / 2 + h; sx += sw * 2) {
-            ctx.beginPath();
-            ctx.moveTo(sx, p.y);
-            ctx.lineTo(sx + sw, p.y);
-            ctx.lineTo(sx + sw + h, top);
-            ctx.lineTo(sx + h, top);
-            ctx.closePath();
-            ctx.fill();
-          }
-          ctx.restore();
-          // 윗면 — 얇은 밝은 띠 하나가 두께를 만든다
-          ctx.fillStyle = C.emberLight;
-          ctx.fillRect(x - w / 2, top - px(3), w, px(3));
-          return;
-        }
-
-        if (o.kind === 'beam') {
-          // 아래 끝이 러너 키(70)보다 낮고 슬라이드 높이(약 31)보다 높아야
-          // '숙여야 지나간다' 가 눈으로 읽힌다
-          const bh = 30 * vs;
-          const top = p.y - 78 * vs;
-          ctx.fillStyle = '#0f4a6e';
-          ctx.fillRect(x - w / 2, top, w, bh);
-          ctx.fillStyle = 'rgba(180, 245, 255, 0.5)';
-          ctx.fillRect(x - w / 2, top, w, px(2));
-          // 아래쪽 모서리를 밝힌다. 몸을 숙여 지나갈 틈이 여기다
-          ctx.fillStyle = C.cyan;
-          ctx.fillRect(x - w / 2, top + bh - px(5), w, px(5));
-          return;
-        }
-
-        // pillar — 레인을 바꾸는 수밖에 없다. 가장 굵고 가장 어둡다
-        const ph = 160 * vs;
-        const pw = w / 2;
-        groundShadow(x, p.y, pw * 0.7, vs, 0.45);
-        ctx.fillStyle = C.violetDark;
-        ctx.fillRect(x - pw / 2, p.y - ph, pw, ph);
-        // 한쪽 모서리만 밝혀 둥글게 보이게 한다
-        ctx.fillStyle = C.violet;
-        ctx.fillRect(x - pw / 2, p.y - ph, px(4), ph);
-        ctx.fillStyle = C.violetLight;
-        ctx.fillRect(x - pw / 2, p.y - ph, pw, px(5));
-      }
-
-      // ── 러너 — 뒤에서 본 모습. 팔다리는 굵은 선 하나씩이고,
-      // 자세가 세 개(달리기·점프·슬라이드) 뿐이지만 그 셋이 게임의 전부다.
-      // 좌표는 발밑이 (0,0) 이고 위로 갈수록 음수인 캐릭터 단위다
-      function limb(x1, y1, x2, y2, width, color) {
-        ctx.strokeStyle = color;
-        ctx.lineWidth = width;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        // 살짝 휘어야 관절이 있는 것처럼 보인다
-        ctx.quadraticCurveTo((x1 + x2) / 2 + (x2 - x1) * 0.35, (y1 + y2) / 2, x2, y2);
-        ctx.stroke();
-      }
-
-      function drawRunner(x, feetY, s, phase, pose) {
-        ctx.save();
-        ctx.translate(x, feetY);
-        ctx.scale(s, s);
-        if (pose === 'slide') ctx.scale(1, 0.44);   // 납작하게 눕는다
-
-        if (pose === 'jump') {
-          limb(-6, -26, -12, -13, 8, C.mintDark);
-          limb(6, -26, 12, -13, 8, C.mint);
-          limb(-11, -49, -21, -61, 6.5, C.mintDark);
-          limb(11, -49, 21, -61, 6.5, C.mint);
-        } else if (pose === 'slide') {
-          limb(-6, -26, -16, -4, 8, C.mintDark);
-          limb(6, -26, 16, -4, 8, C.mint);
-          limb(-11, -49, -22, -43, 6.5, C.mintDark);
-          limb(11, -49, 22, -43, 6.5, C.mint);
-        } else {
-          for (const side of [-1, 1]) {
-            const p = phase + (side < 0 ? Math.PI : 0);
-            const lift = Math.max(0, Math.sin(p));
-            limb(side * 6, -26, side * 6 + Math.sin(p) * 7, -lift * 17, 8,
-                 side < 0 ? C.mintDark : C.mint);
-          }
-          // 손은 몸통(±12) 밖으로 나가야 보인다. 안쪽에 두면 몸통이 덮어버린다
-          for (const side of [-1, 1]) {
-            const p = phase + (side < 0 ? 0 : Math.PI);
-            const lift = Math.max(0, Math.sin(p));
-            limb(side * 11, -49, side * 19, -30 - lift * 15, 6.5,
-                 side < 0 ? C.mintDark : C.mint);
-          }
-        }
-
-        // 몸통과 머리는 팔다리 위에 온다
-        ctx.fillStyle = C.mint;
-        ctx.beginPath();
-        ctx.roundRect(-12, -53, 24, 30, 9);
-        ctx.fill();
-        // 세계의 광원은 청록이다. 러너에게도 같은 빛이 닿아야 한다
-        ctx.strokeStyle = 'rgba(165, 243, 255, 0.4)';
-        ctx.lineWidth = 1.3;
-        ctx.beginPath();
-        ctx.roundRect(-12, -53, 24, 30, 9);
-        ctx.stroke();
-
-        ctx.fillStyle = C.mint;
-        ctx.beginPath();
-        ctx.arc(0, -63, 9.5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = 'rgba(6, 32, 18, 0.3)';
-        ctx.beginPath();
-        ctx.arc(0, -66, 6, 0, Math.PI * 2);   // 뒤통수 — 뒤에서 보고 있다는 표시
-        ctx.fill();
-
-        ctx.restore();
-      }
-
-      function drawCharacter(W, H) {
-        const p = project(Z_CHAR, H);
-        const x = laneScreenX(laneVisual, p.scale, W);
-        let hop = 0;
-        if (nowMs < jumpEndMs) {
-          const t = 1 - (jumpEndMs - nowMs) / JUMP_MS;   // 0 → 1
-          hop = Math.sin(t * Math.PI) * 90;
-        }
-        const s = p.scale * WORLD_SCALE;
-        // 그림자는 뜰수록 작아진다. 얼마나 높이 떠 있는지 읽는 유일한 단서다
-        const near = 1 - Math.min(hop / 110, 0.62);
-        ctx.fillStyle = `rgba(126, 246, 160, ${(0.2 * near).toFixed(3)})`;
-        ctx.beginPath();
-        ctx.ellipse(x, p.y, 28 * s * near, 9 * s * near, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = `rgba(0, 0, 0, ${(0.18 * near).toFixed(3)})`;
-        ctx.beginPath();
-        ctx.ellipse(x, p.y, 22 * s * near, 7 * s * near, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = `rgba(0, 0, 0, ${(0.32 * near).toFixed(3)})`;
-        ctx.beginPath();
-        ctx.ellipse(x, p.y, 15 * s * near, 4.5 * s * near, 0, 0, Math.PI * 2);
-        ctx.fill();
-
-        const pose = nowMs < jumpEndMs ? 'jump' : sliding ? 'slide' : 'run';
-        // 달리기 위상은 이동 거리로 돌린다. 빨라지면 발도 저절로 빨라진다
-        drawRunner(x, p.y - hop * s, s, distance * 0.55, pose);
-      }
-
-      function drawHud(W, H) {
-        const pad = 28;
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'alphabetic';
-
-        const score = String(getScore());
-        ctx.font = `400 46px ${DISPLAY_FONT}`;
-        const scoreW = ctx.measureText(score).width;
-        ctx.fillStyle = C.ink;
-        ctx.fillText(score, pad, pad + 40);
-        ctx.fillStyle = C.inkDim;
-        ctx.font = '600 16px system-ui, sans-serif';
-        ctx.fillText('점', pad + scoreW + 7, pad + 40);
-
-        // 속도 게이지 — 막대는 한 단계분, 숫자는 몇 단계인지
-        const barY = pad + 56;
-        const gauge = speedGauge(speed);
-        ctx.fillStyle = 'rgba(125, 214, 255, 0.16)';
-        ctx.fillRect(pad, barY, 132, 3);
-        ctx.fillStyle = C.cyan;
-        ctx.fillRect(pad, barY, 132 * gauge.fill, 3);
-
-        ctx.textBaseline = 'middle';
-        ctx.font = '600 14px system-ui, sans-serif';
-        ctx.fillText(`${gauge.level}단계`, pad + 142, barY + 2);
-
-        // 코인 — 아이콘도 같은 금화다. 화면 안의 것과 같은 것임이 보여야 한다
-        const cy = barY + 24;
-        ctx.fillStyle = C.gold;
-        ctx.beginPath();
-        ctx.arc(pad + 6, cy, 6, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = C.inkDim;
-        ctx.font = '600 15px system-ui, sans-serif';
-        ctx.fillText(String(coins), pad + 18, cy + 1);
-        ctx.textBaseline = 'alphabetic';
-      }
-
-      function vignette(W, H, strength) {
-        const g = grads(ctx, W, H);
-        ctx.globalAlpha = strength;
-        ctx.fillStyle = g.vignette;
-        ctx.fillRect(0, 0, W, H);
-        ctx.globalAlpha = 1;
-      }
-
-      function render(W, H) {
-        drawWorld(ctx, W, H, distance);
-        for (const o of [...objects].sort((a, b) => b.z - a.z)) drawObject(o, W, H);
-        drawCharacter(W, H);
-        // 빨라질수록 시야가 좁아진다. 점수판보다 먼저 칠해야 점수가 같이 어두워지지 않는다
-        const t = (speed - BASE_SPEED) / (DARK_SPEED - BASE_SPEED);
-        vignette(W, H, 0.55 + 0.45 * Math.min(1, Math.max(0, t)));
-        drawHud(W, H);
-      }
-
-      // 메뉴 뒤에서도 세계는 돌아간다. 배경만 그린다 — 장애물도 러너도 없다
-      function renderIdle(W, H, atMs) {
-        drawWorld(ctx, W, H, atMs * 0.006);
-        vignette(W, H, 0.6);
-      }
-
       const getScore = () => Math.floor(distance) + coins * COIN_VALUE;
 
-      return { reset, step, render, renderIdle, getState: () => state, getScore };
+      // 그리는 쪽이 필요한 값을 한 번에 넘긴다. 그리는 쪽은 상태를 바꾸지 않는다
+      function view() {
+        return {
+          objects, laneVisual, sliding, distance, speed, coins, nowMs,
+          jumpT: nowMs < jumpEndMs ? 1 - (jumpEndMs - nowMs) / JUMP_MS : null,
+          score: getScore(),
+        };
+      }
+
+      return { reset, step, view, getState: () => state, getScore };
+    }
+
+    // ── 점수판 — 3D 위에 얹은 #hud 캔버스에 그린다
+    function drawHud(ctx, v) {
+      const pad = 28;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
+
+      const score = String(v.score);
+      ctx.font = `400 46px ${DISPLAY_FONT}`;
+      const scoreW = ctx.measureText(score).width;
+      ctx.fillStyle = C.ink;
+      ctx.fillText(score, pad, pad + 40);
+      ctx.fillStyle = C.inkDim;
+      ctx.font = '600 16px system-ui, sans-serif';
+      ctx.fillText('점', pad + scoreW + 7, pad + 40);
+
+      // 속도 게이지 — 막대는 한 단계분, 숫자는 몇 단계인지
+      const barY = pad + 56;
+      const gauge = speedGauge(v.speed);
+      ctx.fillStyle = 'rgba(125, 214, 255, 0.16)';
+      ctx.fillRect(pad, barY, 132, 3);
+      ctx.fillStyle = C.cyan;
+      ctx.fillRect(pad, barY, 132 * gauge.fill, 3);
+
+      ctx.textBaseline = 'middle';
+      ctx.font = '600 14px system-ui, sans-serif';
+      ctx.fillText(`${gauge.level}단계`, pad + 142, barY + 2);
+
+      // 코인 — 아이콘도 같은 금화다. 화면 안의 것과 같은 것임이 보여야 한다
+      const cy = barY + 24;
+      ctx.fillStyle = C.gold;
+      ctx.beginPath();
+      ctx.arc(pad + 6, cy, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = C.inkDim;
+      ctx.font = '600 15px system-ui, sans-serif';
+      ctx.fillText(String(v.coins), pad + 18, cy + 1);
+      ctx.textBaseline = 'alphabetic';
+    }
+
+    // 빨라질수록 시야가 좁아진다. 그라디언트는 크기가 바뀔 때만 다시 만든다
+    let vignetteCache = { key: '' };
+    function drawVignette(ctx, W, H, strength) {
+      const key = `${W}x${H}`;
+      if (vignetteCache.key !== key) {
+        const g = ctx.createRadialGradient(
+          W / 2, H * 0.56, Math.min(W, H) * 0.28,
+          W / 2, H * 0.56, Math.max(W, H) * 0.78
+        );
+        g.addColorStop(0, 'rgba(3, 5, 14, 0)');
+        g.addColorStop(1, 'rgba(3, 5, 14, 0.75)');
+        vignetteCache = { key, g };
+      }
+      ctx.globalAlpha = strength;
+      ctx.fillStyle = vignetteCache.g;
+      ctx.fillRect(0, 0, W, H);
+      ctx.globalAlpha = 1;
+    }
+
+    // ── 3D 렌더러 — view() 값을 받아 Three.js 장면으로 그린다. 게임 상태를 바꾸지 않는다.
+    // 세계 단위: 게임 z 1 = 1. 게임 z 는 멀수록 크고 카메라는 -z 를 보므로 세계 z = -게임 z
+    const LANE_W = 2.4;       // 레인 간격
+    const RUNNER_H = 1.8;     // 러너 키. 장애물 높이는 이것과 판정의 관계로 정했다 (설계 문서 표)
+    const JUMP_H = 2.2;       // 점프 꼭대기 발 높이. 바리케이드(1.1)를 확실히 넘어 보여야 한다
+    const GRID = 7;           // 바닥 격자 한 칸
+    // 발광 효과는 GPU 를 먹는다. 포즈 추적과 같이 돌려 느리면 ?bloom=0 으로 끈다
+    const BLOOM = new URLSearchParams(location.search).get('bloom') !== '0';
+
+    const laneX = (lane) => (lane - 1) * LANE_W;
+
+    function skyTexture(THREE) {
+      const c = document.createElement('canvas');
+      c.width = 2;
+      c.height = 256;
+      const g = c.getContext('2d');
+      const grad = g.createLinearGradient(0, 0, 0, 256);
+      grad.addColorStop(0, C.skyTop);
+      grad.addColorStop(0.4, C.skyMid);
+      grad.addColorStop(0.6, C.skyHorizon);
+      grad.addColorStop(1, C.skyHorizon);
+      g.fillStyle = grad;
+      g.fillRect(0, 0, 2, 256);
+      const t = new THREE.CanvasTexture(c);
+      t.colorSpace = THREE.SRGBColorSpace;
+      return t;
+    }
+
+    function createRenderer3D(THREE, addons, canvas) {
+      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+
+      const scene = new THREE.Scene();
+      scene.background = skyTexture(THREE);
+      // 스폰 지점(100)이 안개 속이다. 장애물이 멀리서 갑자기 튀어나오지 않고 서서히 드러난다
+      scene.fog = new THREE.Fog(C.skyHorizon, 30, 95);
+
+      const camera = new THREE.PerspectiveCamera(62, 1, 0.1, 250);
+
+      // 빛은 두 개뿐이다. 위는 보라, 아래는 청록 — 네온 도시의 반사광
+      scene.add(new THREE.HemisphereLight(0x8f7dff, 0x1a4a6a, 1.6));
+      const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+      sun.position.set(3, 8, 6);
+      scene.add(sun);
+
+      // 바닥 — 카메라 앞 20 부터 뒤로 220 까지
+      const floor = new THREE.Mesh(
+        new THREE.PlaneGeometry(400, 240),
+        new THREE.MeshStandardMaterial({ color: C.groundMid, roughness: 0.95 })
+      );
+      floor.rotation.x = -Math.PI / 2;
+      floor.position.z = -100;
+      scene.add(floor);
+
+      // 달리는 면을 살짝 밝혀 '바닥' 이 아니라 '길' 로 읽히게 한다
+      const track = new THREE.Mesh(
+        new THREE.PlaneGeometry(LANE_W * 3, 240),
+        new THREE.MeshBasicMaterial({ color: C.cyan, transparent: true, opacity: 0.05, depthWrite: false })
+      );
+      track.rotation.x = -Math.PI / 2;
+      track.position.set(0, 0.003, -100);
+      scene.add(track);
+
+      // 격자 — 세계가 흐르고 있다는 증거. 한 칸만큼만 움직였다 되돌아가면 끝없이 흐르는 것처럼 보인다
+      const grid = new THREE.GridHelper(GRID * 34, 34, 0x2a6f9c, 0x1d4f7a);
+      grid.material.transparent = true;
+      grid.material.opacity = 0.55;
+      grid.position.y = 0.006;
+      scene.add(grid);
+
+      // 레인 경계 4줄. 바깥은 밝고 굵게, 안쪽은 흐리게 (2D 때와 같은 규칙)
+      for (const edge of [-0.5, 0.5, 1.5, 2.5]) {
+        const outer = edge === -0.5 || edge === 2.5;
+        const line = new THREE.Mesh(
+          new THREE.BoxGeometry(outer ? 0.09 : 0.045, 0.02, 240),
+          new THREE.MeshBasicMaterial({ color: C.cyan, transparent: !outer, opacity: outer ? 1 : 0.35 })
+        );
+        line.position.set(laneX(edge), 0.01, -100);
+        scene.add(line);
+      }
+
+      // 상자 하나를 늘려 여러 모양으로 쓴다 (장애물·빌딩 공용)
+      const unitBox = new THREE.BoxGeometry(1, 1, 1);
+      const unitEdges = new THREE.EdgesGeometry(unitBox);
+
+      let composer = null;
+      if (BLOOM) {
+        composer = new addons.EffectComposer(renderer);
+        composer.addPass(new addons.RenderPass(scene, camera));
+        // 문턱 0.55 — 발광 재질과 밝은 선만 번진다. 어두운 바닥·하늘은 그대로
+        composer.addPass(new addons.UnrealBloomPass(new THREE.Vector2(256, 256), 0.9, 0.5, 0.55));
+        composer.addPass(new addons.OutputPass());
+      }
+
+      // ── 장애물·러너 자리 (Task 3, 4 가 채운다)
+      const meshes = new Map();
+      const acquire = () => null;
+      const release = () => {};
+
+      let size = '';
+      function resize(W, H) {
+        const key = `${W}x${H}`;
+        if (key === size) return;
+        size = key;
+        renderer.setSize(W, H, false);   // CSS 크기는 스타일시트가 정한다
+        composer?.setSize(W, H);
+        camera.aspect = W / H;
+        camera.updateProjectionMatrix();
+      }
+
+      function scroll(dist) {
+        grid.position.z = -100 + (dist % GRID);
+      }
+
+      // 러너 등 뒤 위. 레인을 옮기면 카메라는 절반만 따라간다 — 다 따라가면 옮긴 느낌이 안 난다
+      function aim(laneVisual) {
+        const x = laneX(laneVisual) * 0.5;
+        camera.position.set(x, 3.4, -Z_CHAR + 6.5);
+        camera.lookAt(x, 1.0, -Z_CHAR - 14);
+      }
+
+      function draw() {
+        if (composer) composer.render();
+        else renderer.render(scene, camera);
+      }
+
+      function render(v, W, H) {
+        resize(W, H);
+        scroll(v.distance);
+        syncMeshes(meshes, v.objects, acquire, release);
+        aim(v.laneVisual);
+        draw();
+      }
+
+      // 메뉴 뒤에서도 세계는 흐른다. 장애물도 러너도 없다
+      function renderIdle(atMs, W, H) {
+        resize(W, H);
+        scroll(atMs * 0.006);
+        syncMeshes(meshes, [], acquire, release);
+        aim(1);
+        draw();
+      }
+
+      return { render, renderIdle };
     }
 
     // ── 키보드 소스 — 개발 편의가 아니라 필수 인프라다.
@@ -1906,17 +1722,20 @@
       return { render, clear, invalidate };
     }
     // ── 화면 전환·API·부트
+    // #canvas 는 3D 전용이다. 여기에 2D 컨텍스트를 한 번이라도 요청하면 WebGL 을 얻을 수 없다
     const canvas = document.getElementById('canvas');
+    const hud = document.getElementById('hud');
+    const hudCtx = hud.getContext('2d');
 
-    function resizeCanvas() {
+    function resizeHud() {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      canvas.width = Math.floor(window.innerWidth * dpr);
-      canvas.height = Math.floor(window.innerHeight * dpr);
+      hud.width = Math.floor(window.innerWidth * dpr);
+      hud.height = Math.floor(window.innerHeight * dpr);
       // 백킹 스토어는 dpr 배 크지만 좌표는 CSS 픽셀로 다룬다. 캔버스 한 단위 = 화면 1px
-      canvas.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
+      hudCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
-    window.addEventListener('resize', resizeCanvas);
-    resizeCanvas();
+    window.addEventListener('resize', resizeHud);
+    resizeHud();
 
     // ── API — 시트는 부가 기능이다. 실패해도 게임은 계속 간다
     const API_SCORES = '/api/scores/';
@@ -1960,7 +1779,7 @@
       const preview = el('preview');
       const cam = el('cam');
 
-      const game = createGame(canvas);
+      const game = createGame();
       const keyboard = createKeyboardSource();
       const mapper = createInputMapper();
       const tracker = createPoseTracker();
@@ -2019,6 +1838,45 @@
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
+      }
+
+      // 3D 엔진은 CDN 에서 받는다. 받는 동안에도 시작 화면과 랭킹은 보인다.
+      // 못 받으면 게임을 할 수 없다 — 보이지 않는 장애물을 피하라고 할 수는 없다
+      let view3d = null;
+      (async () => {
+        try {
+          const [THREE, { EffectComposer }, { RenderPass }, { UnrealBloomPass }, { OutputPass }] =
+            await Promise.all([
+              import('three'),
+              import('three/addons/postprocessing/EffectComposer.js'),
+              import('three/addons/postprocessing/RenderPass.js'),
+              import('three/addons/postprocessing/UnrealBloomPass.js'),
+              import('three/addons/postprocessing/OutputPass.js'),
+            ]);
+          view3d = createRenderer3D(THREE, { EffectComposer, RenderPass, UnrealBloomPass, OutputPass }, canvas);
+        } catch (e) {
+          console.error('3D 화면을 불러오지 못했다', e);
+          el('start-btn').disabled = true;
+          showBanner('3D 화면을 불러오지 못했습니다. 새로고침하거나 다른 브라우저로 열어 주세요');
+        }
+      })();
+
+      function paintIdle(nowMs) {
+        const W = window.innerWidth, H = window.innerHeight;
+        view3d?.renderIdle(nowMs, W, H);
+        hudCtx.clearRect(0, 0, W, H);
+        drawVignette(hudCtx, W, H, 0.6);
+      }
+
+      function paintPlay() {
+        const W = window.innerWidth, H = window.innerHeight;
+        const v = game.view();
+        view3d?.render(v, W, H);
+        hudCtx.clearRect(0, 0, W, H);
+        // 점수판보다 먼저 칠해야 점수가 같이 어두워지지 않는다
+        const t = (v.speed - BASE_SPEED) / (DARK_SPEED - BASE_SPEED);
+        drawVignette(hudCtx, W, H, 0.55 + 0.45 * Math.min(1, Math.max(0, t)));
+        drawHud(hudCtx, v);
       }
 
       // 카메라와 MediaPipe 는 시작 화면을 보는 동안 미리 띄운다
@@ -2113,7 +1971,7 @@
         }
 
         if (phase === 'countdown') {
-          game.renderIdle(window.innerWidth, window.innerHeight, nowMs);
+          paintIdle(nowMs);
           // 자세가 선에 맞은 동안만 시간이 흐르고 기준 자세가 쌓인다. 뒤로 걸어가는 도중의
           // 자세가 기준에 섞이지 않는다. 카메라가 없으면 맞출 것이 없으니 그냥 흐른다
           const m = landmarks ? poseMetrics(landmarks) : null;
@@ -2166,7 +2024,7 @@
         }
 
         if (phase !== 'playing') {
-          game.renderIdle(window.innerWidth, window.innerHeight, nowMs);
+          paintIdle(nowMs);
           // 시작 화면에서도 졸라맨이 따라 움직여야 카메라가 살아있다는 것을 안다
           if (poseReady) overlay.render(landmarks);
           return;
@@ -2188,7 +2046,7 @@
         }
 
         game.step(signal, nowMs);
-        game.render(window.innerWidth, window.innerHeight);
+        paintPlay();
 
         if (game.getState() === 'over') {
           showBanner(null);
