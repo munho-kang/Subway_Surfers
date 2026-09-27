@@ -929,6 +929,31 @@
         assert(bones.every(([a, b]) => a !== HIP_MID && b !== HIP_MID), '골반 중점에 붙은 뼈가 남았다');
       });
 
+      check('사라진 물체의 메시는 풀로 돌아가고 새 물체가 그것을 다시 쓴다', () => {
+        // 몇 분을 달려도 메시 수가 늘기만 하면 안 된다. 동시에 보이는 수만큼만 만들어져야 한다
+        const pool = { coin: [], pillar: [] };
+        let made = 0;
+        const acquire = (kind) => pool[kind].pop() ?? { id: made++, kind };
+        const release = (kind, mesh) => pool[kind].push(mesh);
+        const map = new Map();
+        const a = { kind: 'coin' }, b = { kind: 'coin' }, p = { kind: 'pillar' };
+
+        syncMeshes(map, [a, b, p], acquire, release);
+        assert(map.size === 3 && made === 3, `물체 3개에 메시 ${map.size}개, 만든 수 ${made}`);
+
+        syncMeshes(map, [b, p], acquire, release);
+        assert(!map.has(a) && pool.coin.length === 1, '사라진 코인의 메시가 풀로 돌아가지 않았다');
+
+        const c = { kind: 'coin' };
+        syncMeshes(map, [b, p, c], acquire, release);
+        assert(made === 3, `풀에 코인 메시가 있는데 새로 만들었다 (만든 수 ${made})`);
+        assert(map.get(c).kind === 'coin', '종류가 다른 풀에서 메시를 꺼냈다');
+
+        // 게임오버 뒤 시작 화면 — 이전 판 메시가 남아 보이면 안 된다
+        syncMeshes(map, [], acquire, release);
+        assert(map.size === 0 && pool.coin.length === 2 && pool.pillar.length === 1, '빈 목록인데 메시가 남았다');
+      });
+
       return results;
     }
 
@@ -1130,6 +1155,19 @@
         ctx.stroke();
       }
       ctx.globalAlpha = 1;
+    }
+
+    // 게임 물체와 3D 메시를 1:1 로 짝짓는다. 새 물체는 풀에서 메시를 받고, 사라진 물체의 메시는
+    // 풀로 돌아간다. 프레임마다 메시를 새로 만들면 몇 분 뒤 GPU 메모리가 샌다
+    function syncMeshes(map, objects, acquire, release) {
+      const alive = new Set(objects);
+      for (const [o, mesh] of map) {
+        if (!alive.has(o)) {
+          release(o.kind, mesh);
+          map.delete(o);
+        }
+      }
+      for (const o of objects) if (!map.has(o)) map.set(o, acquire(o.kind));
     }
 
     // 결정적 난수. 시드를 고정하면 같은 코스가 재현된다
