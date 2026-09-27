@@ -1442,6 +1442,71 @@
         pools[kind].push(g);
       }
 
+      // ── 러너 — 뒤에서 본다. 팔다리는 관절(Group)에 매단 캡슐이라 관절을 돌리면 휘두른다.
+      // 모든 치수는 발밑이 원점, 키 RUNNER_H 기준
+      const runner = (() => {
+        const skin = lit(C.mint, 0.1, { roughness: 0.4 });
+        const shade = lit(C.mintDark, 0.08, { roughness: 0.4 });
+        const root = new THREE.Group();   // 발밑. 슬라이드는 이것을 뒤로 눕힌다
+        const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.45, 6, 12), skin);
+        torso.position.y = 1.15;
+        const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 20, 14), skin);
+        head.position.y = RUNNER_H - 0.2;
+        root.add(torso, head);
+        // 관절에서 아래로 매단다. 관절을 +x 로 돌리면 끝이 앞(-z)으로 간다
+        function limb(x, y, len, r, mat) {
+          const joint = new THREE.Group();
+          joint.position.set(x, y, 0);
+          const m = new THREE.Mesh(new THREE.CapsuleGeometry(r, len - 2 * r, 4, 10), mat);
+          m.position.y = -len / 2;
+          joint.add(m);
+          root.add(joint);
+          return joint;
+        }
+        const legL = limb(-0.12, 0.8, 0.8, 0.1, shade);
+        const legR = limb(0.12, 0.8, 0.8, 0.1, skin);
+        const armL = limb(-0.3, 1.45, 0.65, 0.07, shade);
+        const armR = limb(0.3, 1.45, 0.65, 0.07, skin);
+        // 뜰수록 작고 흐려진다. 얼마나 높이 떠 있는지 읽는 유일한 단서다
+        const blob = new THREE.Mesh(shadowGeo, shadowMat.clone());
+        blob.rotation.x = -Math.PI / 2;
+        blob.position.y = 0.012;
+        scene.add(root, blob);
+        return { root, legL, legR, armL, armR, blob };
+      })();
+
+      const SLIDE_TILT = 1.2;   // 약 70°. 머리가 0.8 아래로 내려와 빔(아래 끝 1.2) 밑을 지나가 보인다
+
+      function poseRunner(v) {
+        const r = runner;
+        const x = laneX(v.laneVisual);
+        let y = 0;
+        if (v.jumpT !== null) {
+          y = Math.sin(v.jumpT * Math.PI) * JUMP_H;
+          r.legL.rotation.x = r.legR.rotation.x = 0.9;   // 다리를 앞으로 접는다
+          r.armL.rotation.x = r.armR.rotation.x = 2.6;   // 팔을 머리 위로
+          r.root.rotation.x = 0;
+        } else if (v.sliding) {
+          // 몸이 뒤로 누우면 다리는 저절로 앞을 향한다
+          r.legL.rotation.x = r.legR.rotation.x = 0;
+          r.armL.rotation.x = r.armR.rotation.x = 0.6;
+          r.root.rotation.x = SLIDE_TILT;
+        } else {
+          // 달리기 위상은 이동 거리로 돌린다. 빨라지면 발도 저절로 빨라진다
+          const s = Math.sin(v.distance * 0.55);
+          r.legL.rotation.x = s * 0.8;
+          r.legR.rotation.x = -s * 0.8;
+          r.armL.rotation.x = -s * 0.7;
+          r.armR.rotation.x = s * 0.7;
+          r.root.rotation.x = 0;
+        }
+        r.root.position.set(x, y, -Z_CHAR);
+        const near = 1 - Math.min(y / (JUMP_H * 1.2), 0.62);
+        r.blob.position.set(x, 0.012, -Z_CHAR);
+        r.blob.scale.set(0.55 * near, 0.35 * near, 1);
+        r.blob.material.opacity = 0.45 * near;
+      }
+
       let size = '';
       function resize(W, H) {
         const key = `${W}x${H}`;
@@ -1478,6 +1543,8 @@
           // 돌아가는 금화 — 레인마다 위상을 달리해 줄이 한 덩어리로 돌지 않게 한다
           if (o.kind === 'coin') g.rotation.y = v.nowMs / 320 + o.lane * 1.7;
         }
+        runner.root.visible = runner.blob.visible = true;
+        poseRunner(v);
         aim(v.laneVisual);
         draw();
       }
@@ -1487,6 +1554,7 @@
         resize(W, H);
         scroll(atMs * 0.006);
         syncMeshes(meshes, [], acquire, release);
+        runner.root.visible = runner.blob.visible = false;
         aim(1);
         draw();
       }
