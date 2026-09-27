@@ -4,7 +4,6 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="csrf-token" content="{{ csrf_token }}" />
   <title>포즈 러너</title>
   <!-- 표제용 서체. 네온 글로우는 획이 굵어야 살아서 한글까지 덮는 헤비 페이스를 쓴다.
        못 받아오면 시스템 고딕으로 떨어질 뿐 화면은 그대로 돈다 -->
@@ -1882,7 +1881,6 @@
     resizeCanvas();
 
     // ── API — 시트는 부가 기능이다. 실패해도 게임은 계속 간다
-    const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').content;
     const API_SCORES = '/api/scores/';
 
     async function fetchTopScores() {
@@ -1898,7 +1896,7 @@
       try {
         const res = await fetch(API_SCORES, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ nickname, score }),
           signal: controller.signal,
         });
@@ -2166,7 +2164,7 @@
     }
 
     // 부트 분기는 파일 맨 끝이어야 한다. 위로 올리면 boot() 이 아직 초기화되지 않은
-    // const CSRF_TOKEN / API_SCORES 를 읽어 TDZ ReferenceError 가 난다
+    // const API_SCORES 를 읽어 TDZ ReferenceError 가 난다
     if (new URLSearchParams(location.search).get('test') === '1') {
       renderSelfTests(runSelfTests());
     } else {

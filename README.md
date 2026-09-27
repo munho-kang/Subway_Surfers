@@ -6,34 +6,34 @@
 ## 설치
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+npm install
 ```
 
-## Google Sheets 설정 (선택)
-
-랭킹을 저장하고 불러오려면 Google Sheets 연동이 필요하다. **연동 없이도 게임은 정상적으로
-플레이할 수 있다** — 시트를 설정하지 않으면 랭킹 목록에 "불러올 수 없음"이 표시될 뿐이다.
-
-1. Google Cloud 콘솔에서 서비스 계정을 만들고 JSON 키를 발급받는다.
-2. 발급받은 키를 프로젝트 루트에 `credentials.json` 으로 저장한다 (`.gitignore`에 이미
-   포함돼 있어 커밋되지 않는다).
-3. Google Sheets에 새 스프레드시트를 만들고, 1행에 헤더 `nickname | score | played_at`
-   를 넣는다.
-4. 스프레드시트를 서비스 계정 이메일(JSON 키 안의 `client_email`)과 공유한다.
-5. 시트 URL의 `/d/`와 `/edit` 사이 문자열을 `SHEET_ID` 환경변수로 export 한다.
+## 로컬 실행
 
 ```bash
-export SHEET_ID="..."
+npx wrangler d1 execute pose-runner --local --file=schema.sql   # 처음 한 번
+npm run dev
 ```
 
-## 실행
+브라우저에서 `http://localhost:8787/` 을 연다. 관리자 페이지(`/admin`)를 로컬에서 쓰려면
+프로젝트 루트에 `.dev.vars` 파일을 만들고 `ADMIN_USER=...`, `ADMIN_PASSWORD=...` 를 적는다
+(커밋되지 않는다).
+
+## Cloudflare 배포
 
 ```bash
-SHEET_ID="..." .venv/bin/python manage.py runserver 8000
+npx wrangler login                                               # 처음 한 번
+npm run deploy                                                   # D1 DB 는 첫 배포 때 자동 생성
+npx wrangler d1 execute pose-runner --remote --file=schema.sql   # 처음 한 번, 랭킹 표 만들기
+npx wrangler secret put ADMIN_USER                               # 처음 한 번
+npx wrangler secret put ADMIN_PASSWORD                           # 처음 한 번
 ```
 
-브라우저에서 `http://localhost:8000/` 을 연다.
+## 관리자 페이지
+
+`/admin` 에 들어가면 아이디/비밀번호 창이 뜬다. 로그인하면 전체 기록이 보이고 줄마다 삭제 버튼이 있다.
+아이디/비밀번호는 코드에 없고 Cloudflare 비밀값(`secret put`)으로만 넣는다.
 
 ## 조작
 
@@ -47,10 +47,10 @@ SHEET_ID="..." .venv/bin/python manage.py runserver 8000
 ## 테스트
 
 ```bash
-.venv/bin/pytest -q
+npm test
 ```
 
-`http://localhost:8000/?test=1` 을 열면 InputMapper 셀프 테스트 결과를 볼 수 있다.
+`http://localhost:8787/?test=1` 을 열면 InputMapper 셀프 테스트 결과를 볼 수 있다.
 
 ## 설계 문서
 
