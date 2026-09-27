@@ -338,7 +338,7 @@
              맞춘 채로 5초가 지나면 게임이 시작됩니다.</p>
           <div class="field">
             <input id="nickname" maxlength="12" placeholder="닉네임 (최대 12자)" aria-label="닉네임" />
-            <button id="start-btn">시작</button>
+            <button id="start-btn" disabled>시작</button>
           </div>
           <ul class="keys">
             <li><span class="cap">←</span><span class="cap">→</span> 몸을 좌우로 옮기거나 방향키로 레인 이동</li>
@@ -2061,6 +2061,8 @@
               import('three/addons/postprocessing/OutputPass.js'),
             ]);
           view3d = createRenderer3D(THREE, { EffectComposer, RenderPass, UnrealBloomPass, OutputPass }, canvas);
+          // 시작 버튼은 막힌 채로 태어난다. 3D 가 뜨기 전에 시작하면 안 보이는 장애물에 부딪힌다
+          el('start-btn').disabled = false;
         } catch (e) {
           console.error('3D 화면을 불러오지 못했다', e);
           el('start-btn').disabled = true;
