@@ -98,9 +98,10 @@
     #debug input[type=range] { width: 100%; accent-color: var(--cyan); }
     #debug .row { display: flex; justify-content: space-between; }
 
-    /* ── 경고 배너 — 지금 조작이 안 먹는 이유를 알려주는 유일한 통로다 */
+    /* ── 경고 배너 — 지금 조작이 안 먹는 이유를 알려주는 유일한 통로다.
+       시작 화면(.screen)보다 위에 둔다 — 3D 를 못 불러온 이유는 시작 화면에서 읽혀야 한다 */
     #banner {
-      position: absolute; top: 20px; left: 50%; z-index: 2;
+      position: absolute; top: 20px; left: 50%; z-index: 5;
       transform: translateX(-50%);
       padding: 11px 20px; border-radius: 999px;
       background: rgba(255, 106, 77, 0.14);
@@ -1321,6 +1322,31 @@
       const unitBox = new THREE.BoxGeometry(1, 1, 1);
       const unitEdges = new THREE.EdgesGeometry(unitBox);
 
+      // 네온 도시 — 트랙 양옆 빌딩. 모양은 고정 시드로 한 번만 정하고 z 만 흘린다.
+      // 카메라 뒤로 지나간 빌딩은 안개 너머(-200)로 돌아간다. 거기는 이미 안개 색이라 튀어나오지 않는다
+      const CITY_SPAN = 210;
+      const city = (() => {
+        const rng = mulberry32(7);
+        const winMat = new THREE.MeshStandardMaterial({ color: '#160e36', roughness: 0.8 });
+        const edgeMats = [new THREE.LineBasicMaterial({ color: C.violet }), new THREE.LineBasicMaterial({ color: C.cyan })];
+        const out = [];
+        for (const side of [-1, 1]) {
+          for (let z0 = 0; z0 < CITY_SPAN; z0 += 9 + rng() * 6) {
+            const w = 3 + rng() * 4, h = 6 + rng() * 24, d = 4 + rng() * 5;
+            const g = new THREE.Group();
+            const body = new THREE.Mesh(unitBox, winMat);
+            const edges = new THREE.LineSegments(unitEdges, edgeMats[out.length % 2]);
+            body.scale.set(w, h, d);
+            edges.scale.set(w, h, d);
+            g.add(body, edges);
+            g.position.set(side * (LANE_W * 1.5 + 7 + w / 2 + rng() * 6), h / 2, 0);
+            scene.add(g);
+            out.push({ g, z0 });
+          }
+        }
+        return out;
+      })();
+
       let composer = null;
       if (BLOOM) {
         composer = new addons.EffectComposer(renderer);
@@ -1520,6 +1546,7 @@
 
       function scroll(dist) {
         grid.position.z = -100 + (dist % GRID);
+        for (const b of city) b.g.position.z = -200 + (((b.z0 + dist) % CITY_SPAN) + CITY_SPAN) % CITY_SPAN;
       }
 
       // 러너 등 뒤 위. 레인을 옮기면 카메라는 절반만 따라간다 — 다 따라가면 옮긴 느낌이 안 난다
