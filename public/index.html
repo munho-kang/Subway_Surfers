@@ -1330,10 +1330,117 @@
         composer.addPass(new addons.OutputPass());
       }
 
-      // ── 장애물·러너 자리 (Task 3, 4 가 채운다)
+      // ── 장애물 — 지오메트리와 재질은 종류마다 하나씩만 만들어 공유한다. 새로 만드는 건 껍데기뿐이다
+      const lit = (color, glow = 0, extra = {}) => new THREE.MeshStandardMaterial({
+        color, emissive: color, emissiveIntensity: glow, roughness: 0.55, metalness: 0.1, ...extra,
+      });
+      const glowLine = (color) => new THREE.LineBasicMaterial({ color });
+
+      // 바리케이드 경고 줄무늬. 줄무늬 자체가 빛나야 어두운 트랙에서 읽힌다
+      const stripes = (() => {
+        const c = document.createElement('canvas');
+        c.width = 128;
+        c.height = 64;
+        const g = c.getContext('2d');
+        g.fillStyle = C.emberDark;
+        g.fillRect(0, 0, 128, 64);
+        g.fillStyle = C.ember;
+        for (let x = -64; x < 128; x += 32) {
+          g.beginPath();
+          g.moveTo(x, 64); g.lineTo(x + 16, 64); g.lineTo(x + 80, 0); g.lineTo(x + 64, 0);
+          g.closePath();
+          g.fill();
+        }
+        const t = new THREE.CanvasTexture(c);
+        t.colorSpace = THREE.SRGBColorSpace;
+        return t;
+      })();
+
+      const shadowGeo = new THREE.CircleGeometry(1, 24);
+      const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.4, depthWrite: false });
+      const M = {
+        gold: lit(C.gold, 0.7, { metalness: 0.6, roughness: 0.3 }),
+        stripes: new THREE.MeshStandardMaterial({ map: stripes, emissiveMap: stripes, emissive: 0xffffff, emissiveIntensity: 0.45 }),
+        emberTop: new THREE.MeshBasicMaterial({ color: C.emberLight }),
+        beam: lit('#0f4a6e', 0.15),
+        beamPost: lit('#0f2a44'),
+        cyan: new THREE.MeshBasicMaterial({ color: C.cyan }),
+        pillar: lit(C.violetDark, 0.35),
+        violet: glowLine(C.violet),
+      };
+      const coinGeo = new THREE.CylinderGeometry(0.35, 0.35, 0.08, 28);
+
+      function box(mat, w, h, d, x, y) {
+        const m = new THREE.Mesh(unitBox, mat);
+        m.scale.set(w, h, d);
+        m.position.set(x, y, 0);
+        return m;
+      }
+
+      // 바닥 그림자 — 물체가 땅에 붙어 있다는 가장 싼 단서다
+      function shadow(rx, rz) {
+        const m = new THREE.Mesh(shadowGeo, shadowMat);
+        m.rotation.x = -Math.PI / 2;
+        m.scale.set(rx, rz, 1);
+        m.position.y = 0.012;
+        return m;
+      }
+
+      // 치수는 설계 문서 표 그대로. 높이는 판정(점프·슬라이드)과의 관계로 정했다
+      const BUILD = {
+        coin() {
+          const g = new THREE.Group();
+          const disc = new THREE.Mesh(coinGeo, M.gold);
+          disc.rotation.x = Math.PI / 2;   // 납작한 면이 카메라를 본다
+          disc.position.y = 1.5;
+          // 떠 있는 금화는 그림자가 없으면 어느 레인 위에 있는지 헷갈린다
+          g.add(shadow(0.3, 0.3), disc);
+          return g;
+        },
+        // 점프 꼭대기(2.2)보다 한참 낮다 — '뛰어넘는다' 로 읽혀야 한다
+        barricade() {
+          const g = new THREE.Group();
+          g.add(shadow(1.1, 0.4), box(M.stripes, 1.7, 1.1, 0.35, 0, 0.55), box(M.emberTop, 1.72, 0.06, 0.37, 0, 1.13));
+          return g;
+        },
+        // 아래 끝 1.2 — 선 키(1.8)보다 낮고 슬라이드 높이(약 0.7)보다 높다. 그 틈을 청록으로 밝힌다
+        beam() {
+          const g = new THREE.Group();
+          g.add(
+            shadow(1.0, 0.3),
+            box(M.beam, 1.7, 0.75, 0.3, 0, 1.2 + 0.375),
+            box(M.cyan, 1.7, 0.08, 0.32, 0, 1.24),
+            box(M.beamPost, 0.08, 1.95, 0.08, -0.85, 0.975),
+            box(M.beamPost, 0.08, 1.95, 0.08, 0.85, 0.975),
+          );
+          return g;
+        },
+        // 넘을 수도 숙일 수도 없다. 가장 높고 모서리가 빛난다
+        pillar() {
+          const g = new THREE.Group();
+          const edges = new THREE.LineSegments(unitEdges, M.violet);
+          edges.scale.set(0.86, 4.01, 0.86);
+          edges.position.y = 2;
+          g.add(shadow(0.75, 0.5), box(M.pillar, 0.85, 4, 0.85, 0, 2), edges);
+          return g;
+        },
+      };
+
       const meshes = new Map();
-      const acquire = () => null;
-      const release = () => {};
+      const pools = { coin: [], barricade: [], beam: [], pillar: [] };
+      function acquire(kind) {
+        let g = pools[kind].pop();
+        if (!g) {
+          g = BUILD[kind]();
+          scene.add(g);
+        }
+        g.visible = true;
+        return g;
+      }
+      function release(kind, g) {
+        g.visible = false;
+        pools[kind].push(g);
+      }
 
       let size = '';
       function resize(W, H) {
@@ -1366,6 +1473,11 @@
         resize(W, H);
         scroll(v.distance);
         syncMeshes(meshes, v.objects, acquire, release);
+        for (const [o, g] of meshes) {
+          g.position.set(laneX(o.lane), 0, -o.z);
+          // 돌아가는 금화 — 레인마다 위상을 달리해 줄이 한 덩어리로 돌지 않게 한다
+          if (o.kind === 'coin') g.rotation.y = v.nowMs / 320 + o.lane * 1.7;
+        }
         aim(v.laneVisual);
         draw();
       }
