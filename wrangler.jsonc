@@ -1,9 +1,17 @@
 {
-  "name": "pose-runner",
-  "main": "src/index.js",
-  "compatibility_date": "2026-09-25",
-  // 게임 화면(index.html). 여기 없는 주소(/api, /admin)만 src/index.js 로 간다
-  "assets": { "directory": "public" },
-  // database_id 는 첫 배포 때 Cloudflare 가 새 DB 를 만들고 자동으로 채운다
-  "d1_databases": [{ "binding": "DB", "database_name": "pose-runner" }]
+	"name": "pose-runner",
+	"main": "src/index.js",
+	"compatibility_date": "2026-09-25",
+	// 게임 화면(index.html). 여기 없는 주소(/api, /admin)만 src/index.js 로 간다
+	"assets": {
+		"directory": "public"
+	},
+	// database_id 는 첫 배포 때 Cloudflare 가 새 DB 를 만들고 자동으로 채운다
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "pose-runner",
+			"database_id": "ae6a273c-4db6-48e6-9deb-3a9326259ac3"
+		}
+	]
 }
