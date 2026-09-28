@@ -5,7 +5,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>포즈 러너</title>
-  <!-- 표제용 서체. 네온 글로우는 획이 굵어야 살아서 한글까지 덮는 헤비 페이스를 쓴다.
+  <!-- 표제용 서체. 스티커 글씨는 획이 굵어야 테두리가 살아서 한글까지 덮는 헤비 페이스를 쓴다.
        못 받아오면 시스템 고딕으로 떨어질 뿐 화면은 그대로 돈다 -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -19,54 +19,55 @@
     }
   </script>
   <style>
-    /* ── 세계관 토큰 — 밤의 터널: 깊은 남색 바탕, 보랏빛 지평선, 청록 네온.
-       캔버스도 같은 값을 쓴다 (아래 "── 팔레트" 섹션과 짝을 맞춘다) */
+    /* ── 세계관 토큰 — 한낮의 팝 도시: 파란 하늘, 흰 스티커 카드, 노란 버튼, 남색 글씨.
+       캔버스도 같은 값을 쓴다 (아래 "── 팔레트" 섹션의 C 와 짝을 맞춘다 — 셀프 테스트가 지킨다) */
     :root {
-      --void: #05070f;
-      --deep: #0a0e1f;
-      --panel: #0d1226;
-      --panel-2: #121a35;
-      --edge: rgba(125, 214, 255, 0.16);
-      --edge-strong: rgba(125, 214, 255, 0.38);
-      --ink: #eaf1ff;
-      --ink-dim: #98abd0;
-      --ink-faint: #7488b0;
-      --cyan: #4de3ff;
-      --mint: #7ef6a0;
-      --gold: #ffd34d;
-      --ember: #ff6a4d;
-      --violet: #b06dff;
+      --sky-top: #4fb8ff;
+      --sky-mid: #bfe9ff;
+      --sky-horizon: #fff4c9;
+      --grass: #8fd16a;
+      --ink: #1d2b53;
+      --ink-dim: #4a5b88;
+      --ink-faint: #5f6f9c;
+      --paper: #ffffff;
+      --line: #d7def0;
+      --line-soft: #e6ebf7;
+      --yellow: #ffcc00;
+      --yellow-dark: #d99a00;
+      --stripe-red: #ff4d4d;
+      --green: #2fbf71;
+      --shade: rgba(29, 43, 83, 0.18);   /* 스티커 아래로 떨어진 두께 */
       --r: 14px;
       --ease: cubic-bezier(0.16, 1, 0.3, 1);
       --display: 'Black Han Sans', 'Apple SD Gothic Neo', system-ui, sans-serif;
-      color-scheme: dark;
+      color-scheme: light;
     }
 
     * { box-sizing: border-box; }
 
     body {
-      margin: 0; background: var(--deep); color: var(--ink);
+      margin: 0; background: var(--sky-mid); color: var(--ink);
       font-family: system-ui, -apple-system, "Apple SD Gothic Neo", sans-serif;
       overflow: hidden;
       -webkit-font-smoothing: antialiased;
     }
 
     /* 브라우저가 기본으로 그려주는 것들도 이 세계에 속한다 */
-    ::selection { background: rgba(77, 227, 255, 0.32); color: #fff; }
-    :focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+    ::selection { background: rgba(255, 204, 0, 0.45); color: var(--ink); }
+    :focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
 
     #stage { position: relative; width: 100vw; height: 100dvh; }
     #canvas { display: block; width: 100%; height: 100%; }
     /* 3D 캔버스 위에 얹는 투명 층. 점수판과 비네트만 그린다. 클릭은 아래로 통과시킨다 */
     #hud { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 
-    /* ── 카메라 미리보기 */
+    /* ── 카메라 미리보기 — 흰 테두리를 둘러 사진 스티커처럼 붙인다 */
     #cam {
       position: absolute; right: 18px; bottom: 18px; z-index: 1;
-      width: 200px; border-radius: 12px; overflow: hidden; line-height: 0;
-      border: 1px solid var(--edge);
-      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
-      background: #05070f;
+      width: 200px; border-radius: 14px; overflow: hidden; line-height: 0;
+      border: 4px solid var(--paper);
+      box-shadow: 0 6px 0 var(--shade), 0 14px 30px rgba(29, 43, 83, 0.25);
+      background: #05070f;   /* 졸라맨 화면 바탕. 준비 화면 그림은 바꾸지 않는다 */
     }
     /* 영상은 포즈 인식의 입력일 뿐 화면에는 내지 않는다. 자리는 차지해야 미리보기 크기가
        영상 비율을 따라온다 (display:none 은 안 된다 — 크기가 0 이 된다) */
@@ -77,7 +78,6 @@
       right: auto; bottom: auto; left: 50%; top: 50%;
       transform: translate(-50%, -50%);
       width: auto; z-index: 4;
-      border-color: var(--edge-strong);
     }
     /* 높이로 맞추고 폭은 비율을 따른다. 좁은 창에서는 max-width 가 비율을 지키며 줄인다 */
     #cam.align #preview { width: auto; height: 62vh; max-width: 88vw; }
@@ -85,16 +85,18 @@
        캔버스에 scaleX(-1) 을 걸면 글자까지 뒤집힌다 */
     #overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
 
-    /* ── 디버그 패널 — 튜닝 도구다. 꾸미지 않고 읽히기만 하면 된다 */
+    /* ── 디버그 패널 — 튜닝 도구다. 꾸미지 않고 읽히기만 하면 된다.
+       본문 글자가 남색이라 어두운 패널 위에서는 글자색을 따로 밝혀야 한다 */
     #debug {
       position: absolute; left: 18px; bottom: 18px; z-index: 1;
       width: 260px; padding: 12px 14px; border-radius: 12px;
-      background: rgba(8, 12, 26, 0.88); border: 1px solid var(--edge);
+      background: rgba(8, 12, 26, 0.88); border: 1px solid rgba(125, 214, 255, 0.16);
+      color: #eaf1ff;
       font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
     }
     #debug h3 { margin: 0 0 8px; font-size: 12px; letter-spacing: 0.04em; }
     #debug label { display: block; margin-top: 8px; }
-    #debug input[type=range] { width: 100%; accent-color: var(--cyan); }
+    #debug input[type=range] { width: 100%; accent-color: #4de3ff; }
     #debug .row { display: flex; justify-content: space-between; }
 
     /* ── 경고 배너 — 지금 조작이 안 먹는 이유를 알려주는 유일한 통로다.
@@ -102,12 +104,12 @@
     #banner {
       position: absolute; top: 20px; left: 50%; z-index: 5;
       transform: translateX(-50%);
-      padding: 11px 20px; border-radius: 999px;
-      background: rgba(255, 106, 77, 0.14);
-      border: 1px solid rgba(255, 106, 77, 0.55);
-      color: #ffcbbf;
-      font-size: 14px; font-weight: 600; display: none;
-      backdrop-filter: blur(12px);
+      padding: 10px 20px; border-radius: 999px;
+      background: var(--paper);
+      border: 3px solid var(--stripe-red);
+      color: #c22222;   /* 흰 바탕 대비 5.9:1 */
+      box-shadow: 0 4px 0 rgba(255, 77, 77, 0.3);
+      font-size: 14px; font-weight: 700; display: none;
       animation: drop 0.32s var(--ease);
     }
     @keyframes drop { from { opacity: 0; transform: translate(-50%, -14px); } }
@@ -115,33 +117,33 @@
     #toast {
       position: absolute; bottom: 26px; left: 50%; z-index: 2;
       transform: translateX(-50%);
-      padding: 11px 20px; border-radius: 999px; font-size: 14px;
-      background: rgba(13, 18, 38, 0.92); border: 1px solid var(--edge);
+      padding: 11px 20px; border-radius: 999px; font-size: 14px; font-weight: 600;
+      background: var(--paper); border: 2px solid var(--line);
       color: var(--ink); display: none;
-      backdrop-filter: blur(12px);
+      box-shadow: 0 4px 0 var(--shade);
       animation: rise 0.32s var(--ease);
     }
     @keyframes rise { from { opacity: 0; transform: translate(-50%, 14px); } }
 
-    /* ── 화면 — 캔버스 위에 덮인다. 뒤의 트랙이 비쳐야 게임 안에 있는 느낌이 산다 */
+    /* ── 화면 — 캔버스 위에 덮인다. 뒤의 하늘과 선로가 비쳐야 게임 안에 있는 느낌이 산다 */
     .screen {
       position: absolute; inset: 0; z-index: 3;
       display: flex; align-items: center; justify-content: center;
       padding: 28px; overflow: auto;
       background:
-        radial-gradient(120% 90% at 50% 0%, rgba(90, 40, 160, 0.30), transparent 60%),
-        rgba(5, 7, 15, 0.62);
-      backdrop-filter: blur(7px) saturate(1.15);
+        radial-gradient(120% 90% at 50% 0%, rgba(255, 255, 255, 0.55), transparent 60%),
+        rgba(191, 233, 255, 0.45);
+      backdrop-filter: blur(6px) saturate(1.1);
     }
     .hidden { display: none !important; }
 
+    /* 스티커 카드 — 흰 종이에 아래로 떨어진 두께 */
     .panel {
       width: min(880px, 100%);
       padding: 34px;
-      border-radius: 22px;
-      background: linear-gradient(180deg, rgba(18, 26, 53, 0.86), rgba(10, 14, 31, 0.9));
-      border: 1px solid var(--edge);
-      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+      border-radius: 24px;
+      background: var(--paper);
+      box-shadow: 0 8px 0 var(--shade), 0 24px 50px rgba(29, 43, 83, 0.18);
       animation: enter 0.5s var(--ease);
     }
     @keyframes enter { from { opacity: 0; transform: translateY(18px) scale(0.985); } }
@@ -152,13 +154,12 @@
       font-size: clamp(44px, 8vw, 76px);
       font-weight: 400;
       line-height: 0.95;
-      letter-spacing: -0.02em;
-      color: #fff;
-      /* 네온은 장식이 아니라 이 세계의 광원이다 */
-      text-shadow:
-        0 0 8px rgba(77, 227, 255, 0.6),
-        0 0 26px rgba(77, 227, 255, 0.38),
-        0 0 60px rgba(77, 227, 255, 0.2);
+      letter-spacing: -0.01em;
+      color: var(--yellow);
+      /* 스티커 글씨 — 남색 테두리를 글자 뒤에 칠하고(paint-order) 아래로 두께를 떨어뜨린다 */
+      -webkit-text-stroke: 3px var(--ink);
+      paint-order: stroke fill;
+      text-shadow: 0 6px 0 var(--ink);
     }
 
     .lede { margin: 0; color: var(--ink-dim); line-height: 1.75; font-size: 15px; }
@@ -171,7 +172,7 @@
     }
     @media (min-width: 760px) {
       .start-panel { grid-template-columns: 1.15fr 0.85fr; align-items: start; }
-      .start-rank { border-left: 1px solid var(--edge); padding-left: 34px; }
+      .start-rank { border-left: 2px dashed var(--line-soft); padding-left: 34px; }
     }
     .start-main { display: flex; flex-direction: column; gap: 18px; }
 
@@ -180,31 +181,32 @@
       flex: 1; min-width: 0;
       padding: 14px 16px; font-size: 16px;
       border-radius: var(--r);
-      border: 1px solid var(--edge);
-      background: rgba(5, 7, 15, 0.6);
+      border: 3px solid var(--line);
+      background: #f6f8ff;
       color: var(--ink);
-      caret-color: var(--cyan);
+      caret-color: var(--ink);
       transition: border-color 0.2s var(--ease), background 0.2s var(--ease);
     }
     #nickname::placeholder { color: var(--ink-faint); }
     #nickname:focus {
       outline: none;
-      border-color: var(--edge-strong);
-      background: rgba(5, 7, 15, 0.85);
+      border-color: var(--ink);
+      background: var(--paper);
     }
-    #nickname:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+    #nickname:focus-visible { outline: 3px solid var(--yellow); outline-offset: 2px; }
 
+    /* 두툼한 스티커 버튼 — 누르면 아래 두께만큼 내려간다 */
     button {
-      padding: 14px 30px; font-size: 16px; font-weight: 700; cursor: pointer;
+      padding: 14px 30px; font-size: 17px; font-weight: 800; cursor: pointer;
       border-radius: var(--r); border: 0;
-      background: var(--mint); color: #062012;
+      background: var(--yellow); color: #3a2300;   /* 노랑 위 대비 9.8:1 */
       font-family: inherit;
-      transition: transform 0.18s var(--ease), box-shadow 0.18s var(--ease), filter 0.18s var(--ease);
-      box-shadow: 0 6px 18px rgba(126, 246, 160, 0.22);
+      box-shadow: 0 5px 0 var(--yellow-dark);
+      transition: transform 0.12s var(--ease), box-shadow 0.12s var(--ease), filter 0.18s var(--ease);
     }
-    button:hover { transform: translateY(-2px); box-shadow: 0 12px 28px rgba(126, 246, 160, 0.34); }
-    button:active { transform: translateY(0); filter: brightness(0.94); }
-    button:disabled { opacity: 0.4; cursor: not-allowed; transform: none; box-shadow: none; }
+    button:hover { filter: brightness(1.05); }
+    button:active { transform: translateY(5px); box-shadow: 0 0 0 var(--yellow-dark); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; transform: none; filter: none; }
 
     /* ── 조작 안내 — 키에 적힌 글자를 키 모양 그대로 보여준다 */
     .keys { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 9px; }
@@ -216,11 +218,11 @@
       min-width: 26px; height: 26px; padding: 0 7px;
       display: inline-flex; align-items: center; justify-content: center;
       border-radius: 7px;
-      border: 1px solid var(--edge);
-      border-bottom-width: 2px;
-      background: rgba(5, 7, 15, 0.7);
+      border: 2px solid var(--line);
+      border-bottom-width: 4px;
+      background: var(--paper);
       color: var(--ink);
-      font-size: 12px; font-weight: 600;
+      font-size: 12px; font-weight: 700;
     }
 
     /* ── 랭킹 */
@@ -235,50 +237,59 @@
       display: grid; grid-template-columns: 26px 1fr auto;
       align-items: center; gap: 10px;
       padding: 9px 2px;
-      border-bottom: 1px solid rgba(125, 214, 255, 0.08);
+      border-bottom: 2px dashed var(--line-soft);
       font-size: 14px;
     }
     #ranking li:last-child { border-bottom: 0; }
-    .rk { font-size: 12px; font-weight: 700; color: var(--ink-faint); text-align: center; }
-    .rk-1 { color: var(--gold); }
-    .rk-2 { color: #d7e2f5; }
-    .rk-3 { color: #e0a06a; }
+    /* 등수 — 1·2·3 등은 금·은·동 메달, 나머지는 숫자만 */
+    .rk {
+      width: 24px; height: 24px; border-radius: 50%;
+      display: grid; place-items: center;
+      font-size: 12px; font-weight: 800; color: var(--ink-faint);
+    }
+    .rk-1 { background: var(--yellow); color: #3a2300; }
+    .rk-2 { background: #b8c4dc; color: var(--ink); }
+    .rk-3 { background: #e0925a; color: #3a1a00; }
     .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .sc { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--ink); }
+    .sc { font-variant-numeric: tabular-nums; font-weight: 800; color: var(--ink); }
     /* 안내 문구는 등수 칸에 들어갈 것이 아니다. 격자를 벗어나 한 줄로 흐른다 */
     #ranking li.rank-note {
       display: block; border-bottom: 0;
       color: var(--ink-faint); font-size: 13px; padding: 9px 2px;
     }
     #ranking::-webkit-scrollbar { width: 6px; }
-    #ranking::-webkit-scrollbar-thumb { background: var(--edge); border-radius: 3px; }
+    #ranking::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
     #ranking::-webkit-scrollbar-track { background: transparent; }
 
-    /* ── 준비 화면 — 안내 문구는 위, 남은 시간은 아래. 가운데는 카메라(#cam.align)가 차지한다 */
+    /* ── 준비 화면 — 안내 문구는 위, 남은 시간은 아래. 가운데는 카메라(#cam.align)가 차지한다.
+       뒤가 밝은 하늘이라 흰 글씨에 남색 테두리를 둘러야 읽힌다 */
     #countdown { flex-direction: column; justify-content: space-between; }
     .align-msg {
       margin: 0; text-align: center;
-      font-size: clamp(17px, 2.6vh, 23px); font-weight: 600; color: #fff;
-      text-shadow: 0 0 12px rgba(77, 227, 255, 0.35);
+      font-size: clamp(17px, 2.6vh, 23px); font-weight: 800; color: #fff;
+      -webkit-text-stroke: 5px var(--ink);
+      paint-order: stroke fill;
     }
     .ring { position: relative; display: grid; place-items: center; width: 116px; height: 116px; }
     .ring-track {
       position: absolute; inset: 0; border-radius: 50%;
       background: conic-gradient(
         from -90deg,
-        var(--cyan) calc(var(--p, 1) * 360deg),
-        rgba(125, 214, 255, 0.12) 0
+        var(--yellow) calc(var(--p, 1) * 360deg),
+        rgba(255, 255, 255, 0.6) 0
       );
       -webkit-mask: radial-gradient(circle, transparent 50px, #000 51px);
               mask: radial-gradient(circle, transparent 50px, #000 51px);
-      filter: drop-shadow(0 0 14px rgba(77, 227, 255, 0.45));
+      filter: drop-shadow(0 4px 0 var(--shade));
     }
     #count {
       position: relative;
       font-family: var(--display); font-weight: 400;
       font-size: 54px; line-height: 1; color: #fff;
       font-variant-numeric: tabular-nums;
-      text-shadow: 0 0 10px rgba(77, 227, 255, 0.55), 0 0 44px rgba(77, 227, 255, 0.28);
+      -webkit-text-stroke: 3px var(--ink);
+      paint-order: stroke fill;
+      text-shadow: 0 5px 0 var(--ink);
     }
 
     /* ── 결과 화면 */
@@ -292,19 +303,24 @@
       font-family: var(--display); font-weight: 400;
       font-size: clamp(64px, 14vw, 104px); line-height: 1; color: #fff;
       font-variant-numeric: tabular-nums;
-      text-shadow: 0 0 10px rgba(126, 246, 160, 0.5), 0 0 46px rgba(126, 246, 160, 0.24);
+      -webkit-text-stroke: 3px var(--ink);
+      paint-order: stroke fill;
+      text-shadow: 0 6px 0 var(--ink);
     }
-    .score-big .unit { font-size: 0.34em; color: var(--ink-dim); margin-left: 0.22em; text-shadow: none; }
+    .score-big .unit {
+      font-size: 0.34em; color: var(--ink-dim); margin-left: 0.22em;
+      -webkit-text-stroke: 0; text-shadow: none;
+    }
     .status { margin: 0; display: flex; align-items: center; gap: 9px; font-size: 14px; color: var(--ink-dim); }
     .status::before {
-      content: ''; width: 7px; height: 7px; border-radius: 50%;
+      content: ''; width: 9px; height: 9px; border-radius: 50%;
       background: var(--ink-faint); flex: none;
     }
-    .status.ok::before { background: var(--mint); box-shadow: 0 0 10px rgba(126, 246, 160, 0.7); }
-    .status.bad::before { background: var(--ember); box-shadow: 0 0 10px rgba(255, 106, 77, 0.7); }
+    .status.ok::before { background: var(--green); }
+    .status.bad::before { background: var(--stripe-red); }
     /* 2.5초 뒤 시작 화면으로 돌아간다. 얼마나 남았는지 보여준다 */
-    .restart-bar { width: 150px; height: 2px; background: var(--edge); border-radius: 2px; overflow: hidden; }
-    .restart-bar i { display: block; height: 100%; background: var(--cyan); transform-origin: left; }
+    .restart-bar { width: 150px; height: 6px; background: var(--line-soft); border-radius: 3px; overflow: hidden; }
+    .restart-bar i { display: block; height: 100%; background: var(--yellow); transform-origin: left; }
     .restart-bar.run i { animation: drain 2.5s linear forwards; }
     @keyframes drain { from { transform: scaleX(1); } to { transform: scaleX(0); } }
 
@@ -313,7 +329,6 @@
       .panel, #banner, #toast { animation: none; }
       .restart-bar.run i { animation: none; transform: scaleX(0); }
       button { transition: none; }
-      button:hover { transform: none; }
     }
   </style>
 </head>
@@ -974,13 +989,26 @@
         assert(hudCardWidth(wide) >= need, `점수 폭 ${wide} 인데 카드 폭 ${hudCardWidth(wide)} — ${need} 는 돼야 한다`);
       });
 
+      check('CSS :root 의 색과 스크립트 팔레트 C 가 같다', () => {
+        // 메뉴는 CSS 로, 3D 세상과 점수판은 C 로 칠한다. 한쪽만 바꾸면 화면이 둘로 갈라진다.
+        // --kebab-case 이름을 camelCase 로 바꿔 짝짓는다 (--ink-dim ↔ C.inkDim)
+        const css = [...document.querySelectorAll('style')].map((s) => s.textContent).join('\n');
+        const root = css.match(/:root\s*\{([^}]*)\}/)[1];
+        const pairs = [...root.matchAll(/--([a-z0-9-]+):\s*(#[0-9a-fA-F]{3,8})\s*;/g)];
+        assert(pairs.length >= 10, `:root 에서 색을 ${pairs.length}개만 찾았다`);
+        for (const [, name, hex] of pairs) {
+          const key = name.replace(/-([a-z0-9])/g, (_, ch) => ch.toUpperCase());
+          assert(C[key]?.toLowerCase() === hex.toLowerCase(), `--${name} 는 ${hex} 인데 C.${key} 는 ${C[key]}`);
+        }
+      });
+
       return results;
     }
 
     function renderSelfTests(results) {
       const passed = results.filter((r) => r.ok).length;
       const rows = results
-        .map((r) => `<li style="color:${r.ok ? '#7ef6a0' : '#ff6b6b'}">
+        .map((r) => `<li style="color:${r.ok ? '#1f8a4c' : '#c22222'}">
           ${r.ok ? 'PASS' : 'FAIL'} — ${r.name}${r.msg ? `<br><small>${r.msg}</small>` : ''}
         </li>`)
         .join('');
