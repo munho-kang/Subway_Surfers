@@ -140,6 +140,9 @@
     /* 스티커 카드 — 흰 종이에 아래로 떨어진 두께 */
     .panel {
       width: min(880px, 100%);
+      /* 가운데 정렬은 align-items 대신 auto 여백으로 한다. 카드가 화면보다 길면 align-items:center 는
+         위로도 넘쳐 제목이 스크롤로도 닿지 않는 곳에 잘린다. auto 여백은 넘치면 0 이 돼 위에서부터 쌓인다 */
+      margin: auto;
       padding: 34px;
       border-radius: 24px;
       background: var(--paper);
