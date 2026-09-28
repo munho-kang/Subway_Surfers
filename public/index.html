@@ -966,6 +966,14 @@
         assert(map.size === 0 && pool.coin.length === 2 && pool.pillar.length === 1, '빈 목록인데 메시가 남았다');
       });
 
+      check('점수판 카드는 점수가 아무리 길어도 글자를 다 담는다', () => {
+        // 속도에 상한이 없으니 점수 자릿수에도 끝이 없다. 카드가 고정 폭이면 언젠가 숫자가 삐져나간다
+        assert(hudCardWidth(0) === HUD_MIN_W, `빈 점수인데 카드 폭 ${hudCardWidth(0)} (기대 ${HUD_MIN_W})`);
+        const wide = 9 * 25;   // 42px 헤비 서체 숫자 한 자는 약 25px — 9자리
+        const need = wide + 16 * 2 + 23;   // 안쪽 여백 양쪽 + '점' 과 그 앞 간격
+        assert(hudCardWidth(wide) >= need, `점수 폭 ${wide} 인데 카드 폭 ${hudCardWidth(wide)} — ${need} 는 돼야 한다`);
+      });
+
       return results;
     }
 
@@ -1021,8 +1029,6 @@
       blue: '#2f5bd3', blueDark: '#23449e', pink: '#ff4d8d',
       skin: '#ffcf9e', skinDark: '#e8b27f', lamp: '#fff6b0',
       green: '#2fbf71',
-      // 옛 네온 색 — 점수판을 옮기면 지운다
-      cyan: '#4de3ff', gold: '#ffd34d',
     };
     // 건물 색. 건물마다 돌려 쓴다
     const BUILDING_COLORS = ['#ff7a59', '#ffd23f', '#3dd68c', '#8b7bff', '#ff4d8d', '#35b6ff'];
@@ -1184,42 +1190,70 @@
       return { reset, step, view, getState: () => state, getScore };
     }
 
-    // ── 점수판 — 3D 위에 얹은 #hud 캔버스에 그린다
+    // ── 점수판 — 3D 위에 얹은 #hud 캔버스에 그린다. 밝은 하늘 위에서도 읽히도록 흰 스티커 카드 위에 쓴다
+    // 카드 폭. 속도에 상한이 없어 점수 자릿수도 끝이 없다 — 카드가 글자를 따라 늘어난다
+    const HUD_MIN_W = 220;   // 속도 막대(132) + 단계 글자 + 안쪽 여백이 들어가는 폭
+    function hudCardWidth(scoreTextW) {
+      return Math.max(HUD_MIN_W, Math.ceil(scoreTextW) + 64);
+    }
+
     function drawHud(ctx, v) {
-      const pad = 28;
+      const pad = 20, inner = 16;
+      const score = String(v.score);
       ctx.textAlign = 'left';
       ctx.textBaseline = 'alphabetic';
-
-      const score = String(v.score);
-      ctx.font = `400 46px ${DISPLAY_FONT}`;
+      ctx.font = `400 42px ${DISPLAY_FONT}`;
       const scoreW = ctx.measureText(score).width;
+      const cardW = hudCardWidth(scoreW), cardH = 112;
+
+      // 카드 — 아래로 떨어진 남색 두께가 메뉴의 스티커 카드와 같은 모양을 만든다
+      ctx.fillStyle = 'rgba(29, 43, 83, 0.22)';
+      ctx.beginPath();
+      ctx.roundRect(pad, pad + 5, cardW, cardH, 18);
+      ctx.fill();
+      ctx.fillStyle = C.paper;
+      ctx.beginPath();
+      ctx.roundRect(pad, pad, cardW, cardH, 18);
+      ctx.fill();
+
+      const x = pad + inner;
       ctx.fillStyle = C.ink;
-      ctx.fillText(score, pad, pad + 40);
+      ctx.fillText(score, x, pad + 50);
       ctx.fillStyle = C.inkDim;
       ctx.font = '600 16px system-ui, sans-serif';
-      ctx.fillText('점', pad + scoreW + 7, pad + 40);
+      ctx.fillText('점', x + scoreW + 7, pad + 50);
 
       // 속도 게이지 — 막대는 한 단계분, 숫자는 몇 단계인지
-      const barY = pad + 56;
+      const barY = pad + 66;
       const gauge = speedGauge(v.speed);
-      ctx.fillStyle = 'rgba(125, 214, 255, 0.16)';
-      ctx.fillRect(pad, barY, 132, 3);
-      ctx.fillStyle = C.cyan;
-      ctx.fillRect(pad, barY, 132 * gauge.fill, 3);
-
-      ctx.textBaseline = 'middle';
-      ctx.font = '600 14px system-ui, sans-serif';
-      ctx.fillText(`${gauge.level}단계`, pad + 142, barY + 2);
-
-      // 코인 — 아이콘도 같은 금화다. 화면 안의 것과 같은 것임이 보여야 한다
-      const cy = barY + 24;
-      ctx.fillStyle = C.gold;
+      ctx.fillStyle = C.lineSoft;
       ctx.beginPath();
-      ctx.arc(pad + 6, cy, 6, 0, Math.PI * 2);
+      ctx.roundRect(x, barY, 132, 6, 3);
+      ctx.fill();
+      if (gauge.fill > 0) {
+        ctx.fillStyle = C.yellow;
+        ctx.beginPath();
+        ctx.roundRect(x, barY, 132 * gauge.fill, 6, 3);
+        ctx.fill();
+      }
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = C.inkDim;
+      ctx.font = '600 14px system-ui, sans-serif';
+      ctx.fillText(`${gauge.level}단계`, x + 142, barY + 3);
+
+      // 코인 — 아이콘도 화면 안의 금화와 같은 모양(진한 테두리 + 밝은 면)이다
+      const cy = barY + 26;
+      ctx.fillStyle = C.yellowDark;
+      ctx.beginPath();
+      ctx.arc(x + 7, cy, 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = C.yellow;
+      ctx.beginPath();
+      ctx.arc(x + 7, cy, 5, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = C.inkDim;
       ctx.font = '600 15px system-ui, sans-serif';
-      ctx.fillText(String(v.coins), pad + 18, cy + 1);
+      ctx.fillText(String(v.coins), x + 20, cy + 1);
       ctx.textBaseline = 'alphabetic';
     }
 
@@ -1232,8 +1266,9 @@
           W / 2, H * 0.56, Math.min(W, H) * 0.28,
           W / 2, H * 0.56, Math.max(W, H) * 0.78
         );
-        g.addColorStop(0, 'rgba(3, 5, 14, 0)');
-        g.addColorStop(1, 'rgba(3, 5, 14, 0.75)');
+        // 밝은 한낮이라 검게 누르면 흙탕물처럼 보인다. 남색으로 옅게만 좁힌다
+        g.addColorStop(0, 'rgba(29, 43, 83, 0)');
+        g.addColorStop(1, 'rgba(29, 43, 83, 0.4)');
         vignetteCache = { key, g };
       }
       ctx.globalAlpha = strength;
