@@ -14,8 +14,7 @@
   <script type="importmap">
     {
       "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
-        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"
+        "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js"
       }
     }
   </script>
@@ -1013,14 +1012,22 @@
 
     // ── 팔레트 — 위 CSS :root 와 같은 값이다. 한쪽만 바꾸면 화면이 갈라진다
     const C = {
-      skyTop: '#05070f', skyMid: '#141033', skyHorizon: '#3a1d63',
-      groundFar: '#161f42', groundMid: '#0b1128', groundNear: '#070a18',
-      ink: '#eaf1ff', inkDim: '#98abd0',
-      cyan: '#4de3ff', mint: '#7ef6a0', mintDark: '#3fbf74',
-      gold: '#ffd34d', goldLight: '#fff2b8',
+      skyTop: '#4fb8ff', skyMid: '#bfe9ff', skyHorizon: '#fff4c9',
+      grass: '#8fd16a', gravel: '#b9a58f', tie: '#8a6a4f', rail: '#d9dde3',
+      ink: '#1d2b53', inkDim: '#4a5b88', inkFaint: '#5f6f9c',
+      paper: '#ffffff', line: '#d7def0', lineSoft: '#e6ebf7',
+      yellow: '#ffcc00', yellowDark: '#d99a00',
+      red: '#e8453c', redLight: '#ff7a70', stripeRed: '#ff4d4d',
+      blue: '#2f5bd3', blueDark: '#23449e', pink: '#ff4d8d',
+      skin: '#ffcf9e', skinDark: '#e8b27f', lamp: '#fff6b0',
+      green: '#2fbf71',
+      // 옛 네온 색 — 장애물·러너와 점수판을 옮기면 지운다
+      cyan: '#4de3ff', mint: '#7ef6a0', mintDark: '#3fbf74', gold: '#ffd34d',
       ember: '#ff6a4d', emberLight: '#ffb199', emberDark: '#7a2418',
-      violet: '#b06dff', violetDark: '#3b1a6b', violetLight: '#d8b4ff',
+      violet: '#b06dff', violetDark: '#3b1a6b',
     };
+    // 건물 색. 건물마다 돌려 쓴다
+    const BUILDING_COLORS = ['#ff7a59', '#ffd23f', '#3dd68c', '#8b7bff', '#ff4d8d', '#35b6ff'];
     const DISPLAY_FONT = "'Black Han Sans', 'Apple SD Gothic Neo', system-ui, sans-serif";
     // 게임 물체와 3D 메시를 1:1 로 짝짓는다. 새 물체는 풀에서 메시를 받고, 사라진 물체의 메시는
     // 풀로 돌아간다. 프레임마다 메시를 새로 만들면 몇 분 뒤 GPU 메모리가 샌다
@@ -1242,9 +1249,7 @@
     const LANE_W = 2.4;       // 레인 간격
     const RUNNER_H = 1.8;     // 러너 키. 장애물 높이는 이것과 판정의 관계로 정했다 (설계 문서 표)
     const JUMP_H = 2.2;       // 점프 꼭대기 발 높이. 바리케이드(1.1)를 확실히 넘어 보여야 한다
-    const GRID = 7;           // 바닥 격자 한 칸
-    // 발광 효과는 GPU 를 먹는다. 포즈 추적과 같이 돌려 느리면 ?bloom=0 으로 끈다
-    const BLOOM = new URLSearchParams(location.search).get('bloom') !== '0';
+    const TIE = 1.2;          // 침목 간격. 선로 무늬 한 칸이다
 
     const laneX = (lane) => (lane - 1) * LANE_W;
 
@@ -1265,80 +1270,118 @@
       return t;
     }
 
-    function createRenderer3D(THREE, addons, canvas) {
+    function createRenderer3D(THREE, canvas) {
       const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
 
       const scene = new THREE.Scene();
       scene.background = skyTexture(THREE);
-      // 스폰 지점(100)이 안개 속이다. 장애물이 멀리서 갑자기 튀어나오지 않고 서서히 드러난다
+      // 스폰 지점(100)이 안개 속이다. 장애물이 멀리서 갑자기 튀어나오지 않고 하늘빛에서 서서히 드러난다
       scene.fog = new THREE.Fog(C.skyHorizon, 30, 95);
 
       const camera = new THREE.PerspectiveCamera(62, 1, 0.1, 250);
 
-      // 빛은 두 개뿐이다. 위는 보라, 아래는 청록 — 네온 도시의 반사광
-      scene.add(new THREE.HemisphereLight(0x8f7dff, 0x1a4a6a, 1.6));
-      const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+      // 한낮이다. 위는 하늘빛, 아래는 잔디에서 튀는 빛 — 그늘진 면도 까맣게 죽지 않는다
+      scene.add(new THREE.HemisphereLight(C.skyMid, C.grass, 1.3));
+      const sun = new THREE.DirectionalLight(0xffffff, 2.0);
       sun.position.set(3, 8, 6);
       scene.add(sun);
 
-      // 바닥 — 카메라 앞 20 부터 뒤로 220 까지
+      // 바닥 — 선로 밖은 잔디. 카메라 앞 20 부터 뒤로 220 까지
       const floor = new THREE.Mesh(
         new THREE.PlaneGeometry(400, 240),
-        new THREE.MeshStandardMaterial({ color: C.groundMid, roughness: 0.95 })
+        new THREE.MeshStandardMaterial({ color: C.grass, roughness: 1 })
       );
       floor.rotation.x = -Math.PI / 2;
       floor.position.z = -100;
       scene.add(floor);
 
-      // 달리는 면을 살짝 밝혀 '바닥' 이 아니라 '길' 로 읽히게 한다
+      // 선로 — 자갈 위 침목. 텍스처 한 칸 = 침목 하나, 가로로 레인 수만큼 반복한다.
+      // 흐름은 텍스처를 밀어서 낸다: TIE 만큼 달리면 정확히 한 칸 밀려 끝없이 흐르는 것처럼 보인다
+      const ties = (() => {
+        const c = document.createElement('canvas');
+        c.width = 64;
+        c.height = 64;
+        const g = c.getContext('2d');
+        g.fillStyle = C.gravel;
+        g.fillRect(0, 0, 64, 64);
+        g.fillStyle = C.tie;
+        g.fillRect(6, 22, 52, 20);   // 양옆을 비워 레인 사이에 자갈 틈이 보이게 한다
+        const t = new THREE.CanvasTexture(c);
+        t.colorSpace = THREE.SRGBColorSpace;
+        t.wrapS = t.wrapT = THREE.RepeatWrapping;
+        t.repeat.set(3, 240 / TIE);
+        // 비스듬히 누운 면이라 멀리 갈수록 무늬가 뭉개진다. 비등방 필터가 그걸 늦춘다
+        t.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+        return t;
+      })();
       const track = new THREE.Mesh(
         new THREE.PlaneGeometry(LANE_W * 3, 240),
-        new THREE.MeshBasicMaterial({ color: C.cyan, transparent: true, opacity: 0.05, depthWrite: false })
+        new THREE.MeshStandardMaterial({ map: ties, roughness: 1 })
       );
       track.rotation.x = -Math.PI / 2;
       track.position.set(0, 0.003, -100);
       scene.add(track);
 
-      // 격자 — 세계가 흐르고 있다는 증거. 한 칸만큼만 움직였다 되돌아가면 끝없이 흐르는 것처럼 보인다
-      const grid = new THREE.GridHelper(GRID * 34, 34, 0x2a6f9c, 0x1d4f7a);
-      grid.material.transparent = true;
-      grid.material.opacity = 0.55;
-      grid.position.y = 0.006;
-      scene.add(grid);
-
-      // 레인 경계 4줄. 바깥은 밝고 굵게, 안쪽은 흐리게 (2D 때와 같은 규칙)
-      for (const edge of [-0.5, 0.5, 1.5, 2.5]) {
-        const outer = edge === -0.5 || edge === 2.5;
-        const line = new THREE.Mesh(
-          new THREE.BoxGeometry(outer ? 0.09 : 0.045, 0.02, 240),
-          new THREE.MeshBasicMaterial({ color: C.cyan, transparent: !outer, opacity: outer ? 1 : 0.35 })
-        );
-        line.position.set(laneX(edge), 0.01, -100);
-        scene.add(line);
+      // 레일 — 레인마다 두 줄. z 방향으로 모양이 같아서 흘릴 필요가 없다
+      const railMat = new THREE.MeshStandardMaterial({ color: C.rail, metalness: 0.6, roughness: 0.35 });
+      const railGeo = new THREE.BoxGeometry(0.08, 0.1, 240);
+      for (let lane = 0; lane < 3; lane++) {
+        for (const side of [-1, 1]) {
+          const rail = new THREE.Mesh(railGeo, railMat);
+          rail.position.set(laneX(lane) + side * 0.55, 0.05, -100);
+          scene.add(rail);
+        }
       }
 
-      // 상자 하나를 늘려 여러 모양으로 쓴다 (장애물·빌딩 공용)
+      // 상자 하나를 늘려 여러 모양으로 쓴다 (장애물·건물 공용)
       const unitBox = new THREE.BoxGeometry(1, 1, 1);
       const unitEdges = new THREE.EdgesGeometry(unitBox);
 
-      // 네온 도시 — 트랙 양옆 빌딩. 모양은 고정 시드로 한 번만 정하고 z 만 흘린다.
-      // 카메라 뒤로 지나간 빌딩은 안개 너머(-200)로 돌아간다. 거기는 이미 안개 색이라 튀어나오지 않는다
+      // 도시 — 트랙 양옆 알록달록한 건물. 모양은 고정 시드로 한 번만 정하고 z 만 흘린다.
+      // 카메라 뒤로 지나간 건물은 안개 너머(-200)로 돌아간다. 거기는 이미 안개 색이라 튀어나오지 않는다
       const CITY_SPAN = 210;
       const city = (() => {
         const rng = mulberry32(7);
-        const winMat = new THREE.MeshStandardMaterial({ color: '#160e36', roughness: 0.8 });
-        const edgeMats = [new THREE.LineBasicMaterial({ color: C.violet }), new THREE.LineBasicMaterial({ color: C.cyan })];
+        // 창문 무늬는 색마다 한 장. 건물마다 반복 횟수만 다른 복사본을 쓴다 (그림 자체는 공유된다)
+        const windowTex = BUILDING_COLORS.map((color) => {
+          const c = document.createElement('canvas');
+          c.width = 32;
+          c.height = 32;
+          const g = c.getContext('2d');
+          g.fillStyle = color;
+          g.fillRect(0, 0, 32, 32);
+          g.fillStyle = 'rgba(255, 255, 255, 0.8)';
+          g.fillRect(9, 8, 14, 16);   // 한 칸에 창문 하나
+          const t = new THREE.CanvasTexture(c);
+          t.colorSpace = THREE.SRGBColorSpace;
+          t.wrapS = t.wrapT = THREE.RepeatWrapping;
+          return t;
+        });
+        const roofMats = BUILDING_COLORS.map((color) =>
+          new THREE.MeshStandardMaterial({ color: new THREE.Color(color).multiplyScalar(0.7), roughness: 0.9 }));
+        // 창문 한 칸은 폭 1.6, 높이 2.2. 반복 횟수를 면 크기에 맞춰야 창문이 늘어나 보이지 않는다
+        function windows(i, across, h) {
+          const t = windowTex[i].clone();
+          t.repeat.set(Math.max(1, Math.round(across / 1.6)), Math.max(1, Math.round(h / 2.2)));
+          t.needsUpdate = true;
+          return new THREE.MeshStandardMaterial({ map: t, roughness: 0.8 });
+        }
         const out = [];
         for (const side of [-1, 1]) {
           for (let z0 = 0; z0 < CITY_SPAN; z0 += 9 + rng() * 6) {
             const w = 3 + rng() * 4, h = 6 + rng() * 24, d = 4 + rng() * 5;
-            const g = new THREE.Group();
-            const body = new THREE.Mesh(unitBox, winMat);
-            const edges = new THREE.LineSegments(unitEdges, edgeMats[out.length % 2]);
+            const i = out.length % BUILDING_COLORS.length;
+            const sideMat = windows(i, d, h), frontMat = windows(i, w, h);
+            // 상자 면 순서: +x, -x, +y, -y, +z, -z. 옆면은 깊이, 앞뒤는 폭 기준으로 창문을 깐다
+            const body = new THREE.Mesh(unitBox, [sideMat, sideMat, roofMats[i], roofMats[i], frontMat, frontMat]);
             body.scale.set(w, h, d);
-            edges.scale.set(w, h, d);
-            g.add(body, edges);
+            // 지붕 테두리 — 조금 넓고 얇은 어두운 판. 하늘과 건물의 경계를 또렷하게 한다
+            const roof = new THREE.Mesh(unitBox, roofMats[i]);
+            roof.scale.set(w + 0.4, 0.5, d + 0.4);
+            roof.position.y = h / 2 + 0.25;
+            const g = new THREE.Group();
+            g.add(body, roof);
             g.position.set(side * (LANE_W * 1.5 + 7 + w / 2 + rng() * 6), h / 2, 0);
             scene.add(g);
             out.push({ g, z0 });
@@ -1346,15 +1389,6 @@
         }
         return out;
       })();
-
-      let composer = null;
-      if (BLOOM) {
-        composer = new addons.EffectComposer(renderer);
-        composer.addPass(new addons.RenderPass(scene, camera));
-        // 문턱 0.55 — 발광 재질과 밝은 선만 번진다. 어두운 바닥·하늘은 그대로
-        composer.addPass(new addons.UnrealBloomPass(new THREE.Vector2(256, 256), 0.9, 0.5, 0.55));
-        composer.addPass(new addons.OutputPass());
-      }
 
       // ── 장애물 — 지오메트리와 재질은 종류마다 하나씩만 만들어 공유한다. 새로 만드는 건 껍데기뿐이다
       const lit = (color, glow = 0, extra = {}) => new THREE.MeshStandardMaterial({
@@ -1565,13 +1599,13 @@
         if (key === size) return;
         size = key;
         renderer.setSize(W, H, false);   // CSS 크기는 스타일시트가 정한다
-        composer?.setSize(W, H);
         camera.aspect = W / H;
         camera.updateProjectionMatrix();
       }
 
       function scroll(dist) {
-        grid.position.z = -100 + (dist % GRID);
+        // 침목이 러너 쪽으로 흘러와야 한다. 건물과 반대로 흐르면 부호를 뒤집는다
+        ties.offset.y = (dist / TIE) % 1;
         for (const b of city) b.g.position.z = -200 + (((b.z0 + dist) % CITY_SPAN) + CITY_SPAN) % CITY_SPAN;
       }
 
@@ -1583,8 +1617,7 @@
       }
 
       function draw() {
-        if (composer) composer.render();
-        else renderer.render(scene, camera);
+        renderer.render(scene, camera);
       }
 
       function render(v, W, H) {
@@ -2078,15 +2111,8 @@
       let view3d = null;
       (async () => {
         try {
-          const [THREE, { EffectComposer }, { RenderPass }, { UnrealBloomPass }, { OutputPass }] =
-            await Promise.all([
-              import('three'),
-              import('three/addons/postprocessing/EffectComposer.js'),
-              import('three/addons/postprocessing/RenderPass.js'),
-              import('three/addons/postprocessing/UnrealBloomPass.js'),
-              import('three/addons/postprocessing/OutputPass.js'),
-            ]);
-          view3d = createRenderer3D(THREE, { EffectComposer, RenderPass, UnrealBloomPass, OutputPass }, canvas);
+          const THREE = await import('three');
+          view3d = createRenderer3D(THREE, canvas);
           // 시작 버튼은 막힌 채로 태어난다. 3D 가 뜨기 전에 시작하면 안 보이는 장애물에 부딪힌다
           el('start-btn').disabled = false;
         } catch (e) {
