@@ -115,7 +115,7 @@
     @keyframes drop { from { opacity: 0; transform: translate(-50%, -14px); } }
 
     #toast {
-      position: absolute; bottom: 26px; left: 50%; z-index: 2;
+      position: absolute; bottom: 26px; left: 50%; z-index: 5;   /* 시작 화면 덮개(3) 위 — 카메라 실패는 시작 화면에서 알려야 한다 */
       transform: translateX(-50%);
       padding: 11px 20px; border-radius: 999px; font-size: 14px; font-weight: 600;
       background: var(--paper); border: 2px solid var(--line);
@@ -1005,6 +1005,27 @@
         }
       });
 
+      check('카메라 알림(토스트)은 메뉴 덮개 위에 뜬다', () => {
+        // '카메라를 쓸 수 없습니다' 는 시작 화면이 떠 있을 때 나온다. 덮개 아래에 깔리면 흐림에 묻힌다
+        const css = [...document.querySelectorAll('style')].map((s) => s.textContent).join('\n');
+        const z = (sel) => Number(css.match(new RegExp(`${sel}\\s*\\{[^}]*z-index:\\s*(\\d+)`))[1]);
+        assert(z('#toast') > z('\\.screen'), `토스트 z-index ${z('#toast')} 가 덮개 ${z('\\.screen')} 보다 낮다`);
+      });
+
+      check('점수판 속도 막대의 빈 칸은 흰 카드 위에서 보이는 line 색이다', () => {
+        // 단계가 막 바뀌면 막대가 비어 있다. 빈 칸 색이 흰색에 묻히면 막대가 통째로 사라져 보인다
+        const fills = [];
+        const ctx = new Proxy({}, {
+          get: (t, k) => k === 'measureText' ? () => ({ width: 20 })
+            : k === 'roundRect' ? () => fills.push(t.fillStyle)
+            : k in t ? t[k] : () => {},
+          set: (t, k, v) => { t[k] = v; return true; },
+        });
+        drawHud(ctx, { score: 0, speed: BASE_SPEED, coins: 0 });
+        // 순서: 카드 그림자, 카드, 빈 막대
+        assert(fills[2] === C.line, `빈 막대 색이 ${fills[2]} (기대 ${C.line})`);
+      });
+
       return results;
     }
 
@@ -1257,7 +1278,7 @@
       // 속도 게이지 — 막대는 한 단계분, 숫자는 몇 단계인지
       const barY = pad + 66;
       const gauge = speedGauge(v.speed);
-      ctx.fillStyle = C.lineSoft;
+      ctx.fillStyle = C.line;
       ctx.beginPath();
       ctx.roundRect(x, barY, 132, 6, 3);
       ctx.fill();
