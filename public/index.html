@@ -1021,10 +1021,8 @@
       blue: '#2f5bd3', blueDark: '#23449e', pink: '#ff4d8d',
       skin: '#ffcf9e', skinDark: '#e8b27f', lamp: '#fff6b0',
       green: '#2fbf71',
-      // 옛 네온 색 — 장애물·러너와 점수판을 옮기면 지운다
-      cyan: '#4de3ff', mint: '#7ef6a0', mintDark: '#3fbf74', gold: '#ffd34d',
-      ember: '#ff6a4d', emberLight: '#ffb199', emberDark: '#7a2418',
-      violet: '#b06dff', violetDark: '#3b1a6b',
+      // 옛 네온 색 — 점수판을 옮기면 지운다
+      cyan: '#4de3ff', gold: '#ffd34d',
     };
     // 건물 색. 건물마다 돌려 쓴다
     const BUILDING_COLORS = ['#ff7a59', '#ffd23f', '#3dd68c', '#8b7bff', '#ff4d8d', '#35b6ff'];
@@ -1336,7 +1334,6 @@
 
       // 상자 하나를 늘려 여러 모양으로 쓴다 (장애물·건물 공용)
       const unitBox = new THREE.BoxGeometry(1, 1, 1);
-      const unitEdges = new THREE.EdgesGeometry(unitBox);
 
       // 도시 — 트랙 양옆 알록달록한 건물. 모양은 고정 시드로 한 번만 정하고 z 만 흘린다.
       // 카메라 뒤로 지나간 건물은 안개 너머(-200)로 돌아간다. 거기는 이미 안개 색이라 튀어나오지 않는다
@@ -1391,20 +1388,17 @@
       })();
 
       // ── 장애물 — 지오메트리와 재질은 종류마다 하나씩만 만들어 공유한다. 새로 만드는 건 껍데기뿐이다
-      const lit = (color, glow = 0, extra = {}) => new THREE.MeshStandardMaterial({
-        color, emissive: color, emissiveIntensity: glow, roughness: 0.55, metalness: 0.1, ...extra,
-      });
-      const glowLine = (color) => new THREE.LineBasicMaterial({ color });
+      const lit = (color, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.6, metalness: 0, ...extra });
 
-      // 바리케이드 경고 줄무늬. 줄무늬 자체가 빛나야 어두운 트랙에서 읽힌다
+      // 바리케이드 공사 줄무늬. 빨강·흰 사선은 누구나 '막혔으니 넘어라' 로 읽는다
       const stripes = (() => {
         const c = document.createElement('canvas');
         c.width = 128;
         c.height = 64;
         const g = c.getContext('2d');
-        g.fillStyle = C.emberDark;
+        g.fillStyle = C.paper;
         g.fillRect(0, 0, 128, 64);
-        g.fillStyle = C.ember;
+        g.fillStyle = C.stripeRed;
         for (let x = -64; x < 128; x += 32) {
           g.beginPath();
           g.moveTo(x, 64); g.lineTo(x + 16, 64); g.lineTo(x + 80, 0); g.lineTo(x + 64, 0);
@@ -1416,15 +1410,15 @@
         return t;
       })();
 
-      // 빔 앞면의 아래 화살표 ▼. 바리케이드 줄무늬가 '넘어라' 이듯 이것은 '숙여라' 다
+      // 문 앞면의 아래 화살표 ▼. 바리케이드 줄무늬가 '넘어라' 이듯 이것은 '숙여라' 다
       const chevrons = (() => {
         const c = document.createElement('canvas');
         c.width = 256;
         c.height = 64;
         const g = c.getContext('2d');
-        g.fillStyle = '#0b2f4a';
+        g.fillStyle = C.yellow;
         g.fillRect(0, 0, 256, 64);
-        g.fillStyle = C.cyan;
+        g.fillStyle = C.ink;
         for (let i = 0; i < 5; i++) {
           const x = (i + 0.5) * (256 / 5);
           g.beginPath();
@@ -1438,23 +1432,28 @@
       })();
 
       const shadowGeo = new THREE.CircleGeometry(1, 24);
-      const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.4, depthWrite: false });
+      // 한낮의 그림자는 까맣지 않다. 남색으로 옅게 깐다
+      const shadowMat = new THREE.MeshBasicMaterial({ color: C.ink, transparent: true, opacity: 0.3, depthWrite: false });
       const M = {
-        gold: lit(C.gold, 0.7, { metalness: 0.6, roughness: 0.3 }),
-        stripes: new THREE.MeshStandardMaterial({ map: stripes, emissiveMap: stripes, emissive: 0xffffff, emissiveIntensity: 0.45 }),
-        emberTop: new THREE.MeshBasicMaterial({ color: C.emberLight }),
-        beam: lit('#0f4a6e', 0.15),
-        chevrons: new THREE.MeshStandardMaterial({ map: chevrons, emissiveMap: chevrons, emissive: 0xffffff, emissiveIntensity: 0.6 }),
-        cyan: new THREE.MeshBasicMaterial({ color: C.cyan }),
-        pillar: lit(C.violetDark, 0.35),
-        violet: glowLine(C.violet),
+        gold: lit(C.yellow, { metalness: 0.3, roughness: 0.35 }),
+        goldRim: lit(C.yellowDark, { metalness: 0.3, roughness: 0.35 }),
+        stripes: new THREE.MeshStandardMaterial({ map: stripes, roughness: 0.6 }),
+        white: lit(C.paper),
+        beam: lit(C.yellow),
+        chevrons: new THREE.MeshStandardMaterial({ map: chevrons, roughness: 0.6 }),
+        post: lit(C.blue),
+        train: lit(C.red, { roughness: 0.45 }),
+        trainTop: lit(C.redLight, { roughness: 0.45 }),
+        glass: lit(C.skyMid, { metalness: 0.2, roughness: 0.15 }),
+        lamp: new THREE.MeshBasicMaterial({ color: C.lamp }),
       };
       const coinGeo = new THREE.CylinderGeometry(0.35, 0.35, 0.08, 28);
+      const coinFaceGeo = new THREE.CylinderGeometry(0.27, 0.27, 0.1, 28);   // 테두리 안쪽 밝은 면
 
-      function box(mat, w, h, d, x, y) {
+      function box(mat, w, h, d, x, y, z = 0) {
         const m = new THREE.Mesh(unitBox, mat);
         m.scale.set(w, h, d);
-        m.position.set(x, y, 0);
+        m.position.set(x, y, z);
         return m;
       }
 
@@ -1471,21 +1470,25 @@
       const BUILD = {
         coin() {
           const g = new THREE.Group();
-          const disc = new THREE.Mesh(coinGeo, M.gold);
-          disc.rotation.x = Math.PI / 2;   // 납작한 면이 카메라를 본다
-          disc.position.y = 1.5;
           // 떠 있는 금화는 그림자가 없으면 어느 레인 위에 있는지 헷갈린다
-          g.add(shadow(0.3, 0.3), disc);
+          g.add(shadow(0.3, 0.3));
+          // 진한 큰 원반 위에 밝은 작은 원반 — 앞에서 보면 테두리가 둘러진 금화다
+          for (const [geo, mat] of [[coinGeo, M.goldRim], [coinFaceGeo, M.gold]]) {
+            const disc = new THREE.Mesh(geo, mat);
+            disc.rotation.x = Math.PI / 2;   // 납작한 면이 카메라를 본다
+            disc.position.y = 1.5;
+            g.add(disc);
+          }
           return g;
         },
         // 점프 꼭대기(2.2)보다 한참 낮다 — '뛰어넘는다' 로 읽혀야 한다
         barricade() {
           const g = new THREE.Group();
-          g.add(shadow(1.1, 0.4), box(M.stripes, 1.7, 1.1, 0.35, 0, 0.55), box(M.emberTop, 1.72, 0.06, 0.37, 0, 1.13));
+          g.add(shadow(1.1, 0.4), box(M.stripes, 1.7, 1.1, 0.35, 0, 0.55), box(M.white, 1.72, 0.06, 0.37, 0, 1.13));
           return g;
         },
         // 아래 끝 1.2 — 선 키(1.8)보다 낮고 슬라이드 높이(약 0.7)보다 높다.
-        // '밑으로 지나가는 문' 으로 읽혀야 한다: 얇은 막대(가슴 높이), 빛나는 기둥이 틈을 감싸고,
+        // '밑으로 지나가는 문' 으로 읽혀야 한다: 파란 기둥 두 개 사이에 노란 판(가슴 높이)을 걸고,
         // 앞뒤 면에만 ▼ 를 새긴다(윗면까지 새기면 위에서 내려다볼 때 어지럽다)
         beam() {
           const g = new THREE.Group();
@@ -1495,19 +1498,25 @@
           g.add(
             shadow(1.0, 0.3),
             bar,
-            box(M.cyan, 1.7, 0.08, 0.32, 0, 1.24),
-            box(M.cyan, 0.12, 1.6, 0.12, -0.85, 0.8),
-            box(M.cyan, 0.12, 1.6, 0.12, 0.85, 0.8),
+            box(M.post, 0.12, 1.6, 0.12, -0.85, 0.8),
+            box(M.post, 0.12, 1.6, 0.12, 0.85, 0.8),
           );
           return g;
         },
-        // 넘을 수도 숙일 수도 없다. 가장 높고 모서리가 빛난다
+        // 넘을 수도 숙일 수도 없다. 레인을 거의 채우는 전철 앞머리라 멀리서도 '막혔다' 로 읽힌다.
+        // 깊이는 짧게 둔다 — 충돌은 z 가 러너를 지나는 한 순간만 본다. 길면 판정이 끝난 뒤에도
+        // 몸통이 레인에 남아, 옆에서 들어온 러너가 전철을 뚫고 지나가 보인다
         pillar() {
           const g = new THREE.Group();
-          const edges = new THREE.LineSegments(unitEdges, M.violet);
-          edges.scale.set(0.86, 4.01, 0.86);
-          edges.position.y = 2;
-          g.add(shadow(0.75, 0.5), box(M.pillar, 0.85, 4, 0.85, 0, 2), edges);
+          const front = 0.61;   // 앞면(+z, 카메라 쪽) 바로 앞
+          g.add(
+            shadow(1.1, 0.7),
+            box(M.train, 2.0, 2.9, 1.2, 0, 1.45),
+            box(M.trainTop, 2.0, 0.3, 1.2, 0, 3.05),
+            box(M.glass, 1.6, 0.8, 0.04, 0, 2.2, front),
+            box(M.lamp, 0.28, 0.2, 0.04, -0.65, 0.7, front),
+            box(M.lamp, 0.28, 0.2, 0.04, 0.65, 0.7, front),
+          );
           return g;
         },
       };
@@ -1531,14 +1540,21 @@
       // ── 러너 — 뒤에서 본다. 팔다리는 관절(Group)에 매단 캡슐이라 관절을 돌리면 휘두른다.
       // 모든 치수는 발밑이 원점, 키 RUNNER_H 기준
       const runner = (() => {
-        const skin = lit(C.mint, 0.1, { roughness: 0.4 });
-        const shade = lit(C.mintDark, 0.08, { roughness: 0.4 });
+        // 멀리서도 튀는 옷차림: 노란 모자, 분홍 티, 청바지. 왼쪽 팔다리는 한 톤 어둡게 해 앞뒤가 읽힌다
+        const skin = lit(C.skin, { roughness: 0.5 });
+        const skinShade = lit(C.skinDark, { roughness: 0.5 });
+        const shirt = lit(C.pink);
+        const jeans = lit(C.blue, { roughness: 0.7 });
+        const jeansShade = lit(C.blueDark, { roughness: 0.7 });
         const root = new THREE.Group();   // 발밑. 슬라이드는 이것을 뒤로 눕힌다
-        const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.45, 6, 12), skin);
+        const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.45, 6, 12), shirt);
         torso.position.y = 1.15;
         const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 20, 14), skin);
         head.position.y = RUNNER_H - 0.2;
-        root.add(torso, head);
+        // 모자 — 머리보다 살짝 큰 반구를 정수리에 씌운다
+        const cap = new THREE.Mesh(new THREE.SphereGeometry(0.215, 20, 8, 0, Math.PI * 2, 0, Math.PI / 2), lit(C.yellow));
+        cap.position.y = RUNNER_H - 0.17;
+        root.add(torso, head, cap);
         // 관절에서 아래로 매단다. 관절을 +x 로 돌리면 끝이 앞(-z)으로 간다
         function limb(x, y, len, r, mat) {
           const joint = new THREE.Group();
@@ -1549,9 +1565,9 @@
           root.add(joint);
           return joint;
         }
-        const legL = limb(-0.12, 0.8, 0.8, 0.1, shade);
-        const legR = limb(0.12, 0.8, 0.8, 0.1, skin);
-        const armL = limb(-0.3, 1.45, 0.65, 0.07, shade);
+        const legL = limb(-0.12, 0.8, 0.8, 0.1, jeansShade);
+        const legR = limb(0.12, 0.8, 0.8, 0.1, jeans);
+        const armL = limb(-0.3, 1.45, 0.65, 0.07, skinShade);
         const armR = limb(0.3, 1.45, 0.65, 0.07, skin);
         // 뜰수록 작고 흐려진다. 얼마나 높이 떠 있는지 읽는 유일한 단서다
         const blob = new THREE.Mesh(shadowGeo, shadowMat.clone());
@@ -1590,7 +1606,7 @@
         const near = 1 - Math.min(y / (JUMP_H * 1.2), 0.62);
         r.blob.position.set(x, 0.012, -Z_CHAR);
         r.blob.scale.set(0.55 * near, 0.35 * near, 1);
-        r.blob.material.opacity = 0.45 * near;
+        r.blob.material.opacity = 0.35 * near;
       }
 
       let size = '';
