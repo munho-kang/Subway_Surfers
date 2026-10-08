@@ -16,24 +16,7 @@ npx wrangler d1 execute pose-runner --local --file=schema.sql   # 처음 한 번
 npm run dev
 ```
 
-브라우저에서 `http://localhost:8787/` 을 연다. 관리자 페이지(`/admin`)를 로컬에서 쓰려면
-프로젝트 루트에 `.dev.vars` 파일을 만들고 `ADMIN_USER=...`, `ADMIN_PASSWORD=...` 를 적는다
-(커밋되지 않는다).
-
-## Cloudflare 배포
-
-```bash
-npx wrangler login                                               # 처음 한 번
-npm run deploy                                                   # D1 DB 는 첫 배포 때 자동 생성
-npx wrangler d1 execute pose-runner --remote --file=schema.sql   # 처음 한 번, 랭킹 표 만들기
-npx wrangler secret put ADMIN_USER                               # 처음 한 번
-npx wrangler secret put ADMIN_PASSWORD                           # 처음 한 번
-```
-
-## 관리자 페이지
-
-`/admin` 에 들어가면 아이디/비밀번호 창이 뜬다. 로그인하면 전체 기록이 보이고 줄마다 삭제 버튼이 있다.
-아이디/비밀번호는 코드에 없고 Cloudflare 비밀값(`secret put`)으로만 넣는다.
+브라우저에서 `http://localhost:8787/` 을 연다.
 
 ## 조작
 
