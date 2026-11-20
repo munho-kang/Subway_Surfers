@@ -52,7 +52,7 @@ test('점수를 저장한다', async () => {
 test('잘못된 요청은 400 이고 저장하지 않는다', async () => {
   const env = makeEnv();
   const bad = [
-    JSON.stringify({ nickname: 'a'.repeat(13), score: 10 }),
+    JSON.stringify({ nickname: 'a'.repeat(31), score: 10 }),
     JSON.stringify({ nickname: '', score: 10 }),
     JSON.stringify({ nickname: 'abc', score: true }),
     JSON.stringify({ nickname: 'abc', score: 1.5 }),
