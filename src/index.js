@@ -1,5 +1,5 @@
 // 게임 화면은 public/ 의 정적 파일로 나간다. 여기선 랭킹 API 와 관리자 페이지만 처리한다
-const NICKNAME_MAX = 12;
+const NICKNAME_MAX = 30;
 
 export default {
   async fetch(request, env) {
